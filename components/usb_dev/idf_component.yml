@@ -1,0 +1,3 @@
+dependencies:
+  # Pinned to the minor version the firmware was written and verified against.
+  espressif/esp_tinyusb: "~2.2.1"

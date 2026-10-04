@@ -1,0 +1,272 @@
+<!doctype html>
+<!--
+  InvenTree NFC scanner: a WebSerial test page.
+
+  Stands in for the InvenTree plugin page. It builds the two-record NDEF message for a stock
+  location, sends a program job over the scanner's serial protocol and shows every line that
+  comes back. Needs Chrome or Edge; open it from http://localhost (python -m http.server in
+  this directory) if the browser will not offer serial ports to a file:// page.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InvenTree NFC scanner</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5d6673; --line: #d5dae1;
+    --accent: #1f6feb; --good: #1a7f37; --bad: #c62828; --warn: #9a6700;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101418; --panel: #181d23; --ink: #e6e9ee; --muted: #98a2b0; --line: #2c343e;
+      --accent: #6aa6ff; --good: #56c271; --bad: #ff7b72; --warn: #e3b341;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; display: grid; gap: 14px; }
+  h1 { font-size: 20px; margin: 0; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+  label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  label.check { display: flex; align-items: center; gap: 6px; padding-bottom: 7px; }
+  input[type=text], input[type=number], select {
+    font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px; min-width: 0; }
+  #host { width: 240px; } #pk { width: 90px; } #pwd { width: 110px; } #pack { width: 70px; } #timeout { width: 80px; }
+  button { font: inherit; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--bg); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { font-weight: 600; }
+  #status.good { color: var(--good); } #status.bad { color: var(--bad); } #status.warn { color: var(--warn); }
+  code, pre, #ndef { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #ndef { color: var(--muted); overflow-wrap: anywhere; margin-top: 8px; }
+  #log { margin: 0; max-height: 46vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tx { color: var(--muted); } .err { color: var(--bad); } .ok { color: var(--good); }
+</style>
+</head>
+<body>
+<main>
+  <h1>InvenTree NFC scanner</h1>
+
+  <section>
+    <h2>Connection</h2>
+    <div class="row">
+      <button id="connect" class="primary">Connect</button>
+      <button id="info" disabled>Info</button>
+      <button id="bootloader" disabled>Bootloader</button>
+      <label>HID keyboard
+        <select id="hid" disabled><option value="">unchanged</option><option value="on">on</option><option value="off">off</option></select>
+      </label>
+      <label>Device log
+        <select id="loglevel" disabled>
+          <option>off</option><option>error</option><option>warn</option><option>info</option><option>debug</option>
+        </select>
+      </label>
+      <span id="status">Not connected</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Program a location tag</h2>
+    <div class="row">
+      <label>Scheme
+        <select id="scheme"><option>https</option><option>http</option></select>
+      </label>
+      <label>InvenTree host <input id="host" type="text" value="inventree.example" spellcheck="false"></label>
+      <label>Location pk <input id="pk" type="number" min="1" value="42"></label>
+      <label>Password (8 hex) <input id="pwd" type="text" placeholder="none" spellcheck="false"></label>
+      <label>PACK (4 hex) <input id="pack" type="text" placeholder="0000" spellcheck="false"></label>
+      <label>Timeout s <input id="timeout" type="number" min="1" max="600" value="60"></label>
+      <label class="check"><input id="overwrite" type="checkbox"> Overwrite</label>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="program" class="primary" disabled>Program</button>
+      <button id="cancel" disabled>Cancel</button>
+      <button id="wipe" disabled>Wipe tag</button>
+    </div>
+    <div id="ndef"></div>
+  </section>
+
+  <section>
+    <h2>Lines</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+'use strict';
+
+const USB_FILTER = { usbVendorId: 0x303A, usbProductId: 0x4E46 };
+const URI_PREFIX = { https: 0x04, http: 0x03 };     // NFC Forum URI record identifier codes
+
+// One short, well-known-type NDEF record.
+function ndefRecord(type, payload, first, last) {
+  if (payload.length > 255) throw new Error('record payload over 255 bytes; shorten the host name');
+  const flags = 0x11 | (first ? 0x80 : 0) | (last ? 0x40 : 0);    // SR, TNF well-known
+  return [flags, 1, payload.length, type.charCodeAt(0), ...payload];
+}
+
+// The message on an InvenTree bin tag: a URI record so a phone opens the location's page,
+// then a Text record with InvenTree's short barcode, which is what the scanner types.
+function buildNdef(host, pk, scheme) {
+  const enc = new TextEncoder();
+  const uri = [URI_PREFIX[scheme], ...enc.encode(`${host}/web/stock/location/${pk}`)];
+  const text = [0x02, ...enc.encode('en'), ...enc.encode(`INV-SL${pk}`)];
+  return Uint8Array.from([...ndefRecord('U', uri, true, false), ...ndefRecord('T', text, false, true)]);
+}
+
+const toHex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+
+if (typeof document !== 'undefined') {
+  const $ = id => document.getElementById(id);
+  const whenConnected = ['info', 'bootloader', 'hid', 'loglevel', 'program', 'cancel', 'wipe'];
+  let port = null, writer = null, nextId = 1;
+
+  function log(text, cls) {
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = text;
+    $('log').append(line);
+    $('log').scrollTop = $('log').scrollHeight;
+  }
+
+  function status(text, cls) {
+    $('status').textContent = text;
+    $('status').className = cls || '';
+  }
+
+  function setConnected(on) {
+    whenConnected.forEach(id => { $(id).disabled = !on; });
+    $('connect').textContent = on ? 'Disconnect' : 'Connect';
+    if (!on) status('Not connected');
+  }
+
+  async function send(obj) {
+    const line = JSON.stringify(obj);
+    log('> ' + line, 'tx');
+    await writer.write(new TextEncoder().encode(line + '\n'));
+  }
+
+  function onMessage(msg) {
+    if (msg.rsp === 'info' && msg.ok) {
+      const reader = msg.pn532 ? `PN532 ${msg.pn532.ver}` : 'no reader';
+      status(`fw ${msg.fw}, ${reader}, ${msg.state}`, msg.pn532 ? 'good' : 'warn');
+    } else if (msg.rsp && !msg.ok) {
+      status(`${msg.rsp}: ${msg.error}${msg.detail ? ' (' + msg.detail + ')' : ''}`, 'bad');
+    } else if (msg.evt === 'waiting') {
+      status(`Job ${msg.id}: present a tag`, 'warn');
+    } else if (msg.evt === 'writing') {
+      status(`Job ${msg.id}: writing ${msg.uid}, hold still`, 'warn');
+    } else if (msg.evt === 'done') {
+      // This is where the plugin page would POST /api/barcode/link/ with msg.uid.
+      status(`Job ${msg.id}: done, UID ${msg.uid}${msg.protected ? ', protected' : ''}`, 'good');
+    } else if (msg.evt === 'failed') {
+      status(`Job ${msg.id}: ${msg.error}${msg.text ? ' (tag holds ' + msg.text + ')' : ''}`, 'bad');
+    } else if (msg.evt === 'tag') {
+      status(msg.error ? `Tag: ${msg.error}` : `Tag ${msg.uid}: ${msg.text || 'no text record'}`, msg.text ? 'good' : 'warn');
+    }
+  }
+
+  async function readLoop() {
+    const decoder = new TextDecoder();
+    const reader = port.readable.getReader();
+    let pending = '';
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = pending.indexOf('\n')) >= 0) {
+          const line = pending.slice(0, nl).trim();
+          pending = pending.slice(nl + 1);
+          if (!line) continue;
+          let msg;
+          try { msg = JSON.parse(line); } catch { log('! ' + line, 'err'); continue; }
+          log('< ' + line, msg.ok === false || msg.evt === 'failed' || msg.evt === 'error' ? 'err'
+                         : msg.evt === 'done' ? 'ok' : '');
+          onMessage(msg);
+        }
+      }
+    } catch (e) {
+      log('! ' + e.message, 'err');
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  async function connect() {
+    port = await navigator.serial.requestPort({ filters: [USB_FILTER] });
+    await port.open({ baudRate: 115200 });
+    // The scanner only sends to a host that has raised DTR.
+    await port.setSignals({ dataTerminalReady: true });
+    writer = port.writable.getWriter();
+    setConnected(true);
+    status('Connected', 'good');
+    readLoop().then(disconnect);
+    await send({ cmd: 'info' });
+  }
+
+  async function disconnect() {
+    if (!port) return;
+    const p = port;
+    port = null;
+    try { writer.releaseLock(); await p.close(); } catch { /* already gone */ }
+    setConnected(false);
+  }
+
+  function job(cmd) {
+    const obj = { cmd, id: nextId++, timeout_ms: Math.round(Number($('timeout').value) * 1000) };
+    const pwd = $('pwd').value.trim();
+    if (pwd) obj.pwd = pwd.toUpperCase();
+    return obj;
+  }
+
+  function currentNdef() {
+    return buildNdef($('host').value.trim(), Number($('pk').value), $('scheme').value);
+  }
+
+  function showNdef() {
+    try { $('ndef').textContent = `NDEF (${currentNdef().length} bytes): ${toHex(currentNdef())}`; }
+    catch (e) { $('ndef').textContent = e.message; }
+  }
+
+  const guard = fn => async () => { try { await fn(); } catch (e) { log('! ' + e.message, 'err'); status(e.message, 'bad'); } };
+
+  $('connect').onclick = guard(() => port ? disconnect() : connect());
+  $('info').onclick = guard(() => send({ cmd: 'info' }));
+  $('bootloader').onclick = guard(() => send({ cmd: 'bootloader' }));
+  $('cancel').onclick = guard(() => send({ cmd: 'cancel' }));
+  $('wipe').onclick = guard(() => send(job('wipe')));
+  $('hid').onchange = guard(() => $('hid').value && send({ cmd: 'hid', enabled: $('hid').value === 'on' }));
+  $('loglevel').onchange = guard(() => send({ cmd: 'log', level: $('loglevel').value }));
+  $('program').onclick = guard(() => {
+    const obj = job('program');
+    obj.ndef = toHex(currentNdef());
+    if ($('overwrite').checked) obj.overwrite = true;
+    const pack = $('pack').value.trim();
+    if (pack) obj.pack = pack.toUpperCase();
+    return send(obj);
+  });
+  ['host', 'pk', 'scheme'].forEach(id => { $(id).oninput = showNdef; });
+  showNdef();
+
+  if (!('serial' in navigator)) {
+    $('connect').disabled = true;
+    status('This browser has no WebSerial; use Chrome or Edge', 'bad');
+  } else {
+    navigator.serial.addEventListener('disconnect', e => { if (e.target === port) disconnect(); });
+  }
+}
+
+// Lets tools/test_sim.py load the NDEF builder under Node and compare it with nfcprog.py's.
+if (typeof module !== 'undefined') module.exports = { buildNdef, toHex };
+</script>
+</body>
+</html>

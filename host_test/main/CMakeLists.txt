@@ -1,0 +1,9 @@
+idf_component_register(SRCS "test_main.c"
+                            "test_util.c"
+                            "test_ndef.c"
+                            "test_pn532_frame.c"
+                            "test_ntag21x.c"
+                            "test_proto.c"
+                            "test_app_core.c"
+                       INCLUDE_DIRS "."
+                       PRIV_REQUIRES unity ndef ntag21x pn532 app_core proto sim_ntag)

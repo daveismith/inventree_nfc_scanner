@@ -1,0 +1,3 @@
+CONFIG_IDF_TARGET="linux"
+# Plain Unity: the tests are run from app_main, not from IDF's interactive test menu.
+CONFIG_UNITY_ENABLE_IDF_TEST_RUNNER=n

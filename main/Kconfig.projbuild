@@ -1,0 +1,114 @@
+menu "InvenTree NFC scanner"
+
+    menu "NFC reader (PN532 over I2C)"
+        config APP_NFC_ENABLE
+            bool "Drive the PN532"
+            default y
+            help
+                Without it the firmware still answers the protocol, and reports that it has
+                no reader.
+
+        config APP_NFC_SDA_GPIO
+            int "SDA GPIO"
+            depends on APP_NFC_ENABLE
+            default 1
+
+        config APP_NFC_SCL_GPIO
+            int "SCL GPIO"
+            depends on APP_NFC_ENABLE
+            default 2
+
+        config APP_NFC_I2C_FREQ_HZ
+            int "I2C clock in Hz"
+            depends on APP_NFC_ENABLE
+            default 400000
+            range 10000 400000
+            help
+                400 kHz works on the bench with the internal pull-ups. Drop to 100000 if
+                commands start timing out on longer wires.
+
+        config APP_NFC_IRQ_GPIO
+            int "IRQ GPIO (-1: not wired)"
+            depends on APP_NFC_ENABLE
+            default -1
+            help
+                The PN532's P70_IRQ. Wired, the firmware watches this pin for an answer
+                instead of reading the chip's status byte over I2C every millisecond.
+
+        config APP_NFC_RST_GPIO
+            int "RSTPD_N GPIO (-1: not wired)"
+            depends on APP_NFC_ENABLE
+            default -1
+            help
+                Wired, the firmware resets the PN532 whenever it has to start it again. It is
+                the only recovery for a chip that has stopped answering, short of unplugging.
+    endmenu
+
+    menu "LED and buzzer"
+        config APP_LED_GPIO
+            int "WS2812 LED GPIO (-1: none)"
+            default 21
+
+        config APP_LED_ORDER_GRB
+            bool "LED colour order is GRB"
+            default n
+            help
+                Most WS2812s take green first; the one on the Waveshare ESP32-S3-Zero takes
+                red first (checked on the board), which is the default here. If red and green
+                come out swapped on another board, flip this.
+
+        config APP_BUZZER_GPIO
+            int "Piezo buzzer GPIO (-1: no buzzer)"
+            default -1
+            help
+                A passive piezo, driven with a square wave. With -1 the firmware is silent
+                and otherwise the same.
+    endmenu
+
+    menu "Keyboard output"
+        config APP_HID_DEFAULT_ON
+            bool "Type a tag's text record on a tap, by default"
+            default y
+            help
+                The setting a device starts with. The `hid` protocol command changes it for
+                a session, or for good with "persist". It has no effect unless the firmware
+                has a HID interface (CONFIG_TINYUSB_HID_COUNT=1).
+    endmenu
+
+    menu "Development recovery"
+        config APP_DEV_RECOVERY
+            bool "Enter ROM download mode by itself when the firmware is unreachable"
+            default y
+            help
+                The board has no USB-UART bridge and TinyUSB owns its only USB port, so
+                firmware that crashes at boot or fails to enumerate cannot be told to enter
+                download mode; someone has to hold BOOT and replug it. With this on, the
+                firmware sends itself to download mode after a run of crashes, or when no host
+                enumerates it after boot. It also adds the `debug` protocol command, which
+                provokes those failures on purpose.
+
+                Turn this off for a device in use. One powered from a charger has no host to
+                enumerate it, and would sit in download mode until power-cycled.
+
+        config APP_DEV_RECOVERY_BOOT_LOOPS
+            int "Crashes in a row before giving up"
+            depends on APP_DEV_RECOVERY
+            default 3
+            range 2 10
+            help
+                Resets caused by a panic or a watchdog, with no healthy run in between.
+
+        config APP_DEV_RECOVERY_HEALTHY_S
+            int "Seconds of uptime that count as a healthy run"
+            depends on APP_DEV_RECOVERY
+            default 30
+            range 5 600
+
+        config APP_DEV_RECOVERY_MOUNT_TIMEOUT_S
+            int "Seconds to wait for a host to enumerate the device"
+            depends on APP_DEV_RECOVERY
+            default 20
+            range 5 600
+    endmenu
+
+endmenu

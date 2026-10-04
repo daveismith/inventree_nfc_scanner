@@ -1,1 +1,43 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# Waveshare ESP32-S3-Zero: 4 MB flash.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# The board's only USB port belongs to TinyUSB, and its CDC interface carries the JSON
+# protocol, so nothing else may write there. Logs go to UART0 (TX GPIO43) and, on request,
+# over the protocol as {"evt":"log"} lines. The secondary console defaults to USB-Serial-JTAG,
+# which shares the PHY TinyUSB takes.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# TinyUSB: a composite of one CDC-ACM interface (the protocol) and a HID keyboard (lookup).
+# With HID in, components/usb_dev/usb_descriptors.c supplies the descriptors. The PID is pinned rather than left at the component default
+# (0x4001, which every esp_tinyusb CDC example and MicroPython also use) so idf_ext.py can
+# tell this board from anything else on the bench -- keep the two in sync.
 CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_COUNT=1
+CONFIG_TINYUSB_HID_COUNT=1
+# A whole line is queued or none of it, so the TX FIFO must hold the longest line sent.
+CONFIG_TINYUSB_CDC_TX_BUFSIZE=2048
+# CONFIG_TINYUSB_DESC_USE_DEFAULT_PID is not set
+CONFIG_TINYUSB_DESC_CUSTOM_PID=0x4E46
+CONFIG_TINYUSB_DESC_MANUFACTURER_STRING="InvenTree"
+CONFIG_TINYUSB_DESC_PRODUCT_STRING="InvenTree NFC Scanner"
+CONFIG_TINYUSB_DESC_CDC_STRING="InvenTree NFC Scanner protocol"
+
+# Nobody watches the UART while the board is flashed remotely. A crash writes a core dump to
+# the `coredump` partition, and `info` reports its summary on the next boot.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# A task that stops yielding becomes a panic, and so a reset that the boot-loop guard counts
+# (main/dev_recovery.c), rather than a board that sits there.
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# The PN532 answers within a millisecond or two and is asked whether it is ready on that
+# scale; at the default 100 Hz tick every exchange would cost 10 ms of waiting.
+CONFIG_FREERTOS_HZ=1000
+
+# Compile debug-level logs in; they stay off until {"cmd":"log","level":"debug"} asks.
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
