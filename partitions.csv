@@ -1,16 +1,22 @@
 # InvenTree NFC scanner -- 4 MB flash (Waveshare ESP32-S3-Zero).
 #
 # Every offset is explicit, so that resizing one partition can never silently move another.
+# Two application slots, so that a unit out of USB reach can be updated over the network and
+# fall back to the previous firmware if the new one does not come up (see the network plan).
 #
 #   0x000000  bootloader
 #   0x008000  partition table
-#   0x009000  nvs        92K   settings (the stored HID default)
-#   0x020000  factory     2M   the application
-#   0x220000  coredump   64K   the last crash, reported by `info` on the next boot
-#   0x230000  ---------- 1.8M unallocated, for a second app slot if a network phase wants OTA
+#   0x009000  nvs        84K   settings, encrypted (keys derived from an eFuse HMAC key)
+#   0x01E000  otadata     8K   which slot boots, and whether it is still on trial
+#   0x020000  ota_0    1.875M  the application; a USB flash writes here
+#   0x200000  ota_1    1.875M  the other slot, written by an update over the network
+#   0x3E0000  coredump   64K   the last crash, reported by `info` on the next boot
+#   0x3F0000  ---------- 64K unallocated
 #   0x400000  end of flash
 #
 # Name,     Type, SubType,  Offset,   Size,     Flags
-nvs,        data, nvs,      0x009000, 0x017000,
-factory,    app,  factory,  0x020000, 0x200000,
-coredump,   data, coredump, 0x220000, 0x010000,
+nvs,        data, nvs,      0x009000, 0x015000,
+otadata,    data, ota,      0x01E000, 0x002000,
+ota_0,      app,  ota_0,    0x020000, 0x1E0000,
+ota_1,      app,  ota_1,    0x200000, 0x1E0000,
+coredump,   data, coredump, 0x3E0000, 0x010000,

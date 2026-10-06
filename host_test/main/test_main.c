@@ -20,5 +20,7 @@ void app_main(void)
     run_ntag21x_tests();
     run_proto_tests();
     run_app_core_tests();
+    run_net_sync_tests();
+    run_wifi_policy_tests();
     exit(UNITY_END() == 0 ? EXIT_SUCCESS : EXIT_FAILURE);
 }

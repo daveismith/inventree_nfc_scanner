@@ -76,6 +76,12 @@ immediate `rsp`; a job's progress follows as `evt` lines.
 | `hid` | `enabled`, `persist`: without `persist` it lasts until the port closes |
 | `log` | `level`: `off`, `error`, `warn`, `info`, `debug` |
 | `bootloader` | |
+| `net` | Network builds, USB only. No fields: report. `action`: `join` (`ssid`, `psk`), `forget` (`ssid`), `server` (`url`, `token`), `poll` (`poll_ms`, `wait_s`); `enabled` with or without an action. See docs/network-transport-plan.md |
+| `ota` | Network builds. `url` of a firmware image, optional `sha256`; progress comes as `ota` events and the device restarts into the new image |
+
+A command carries an origin: its `rsp` goes back to the link that sent it (the USB page, or
+the plugin over the network), events go to every link. From the network, `bootloader`,
+`debug` and `net` answer `not_allowed`. Closing the USB port cancels a job it started.
 
 Events: `hello`, `waiting`, `writing`, `done`, `failed`, `tag`, `tag_removed`, `error`, `log`.
 
@@ -98,6 +104,9 @@ The mapping between lines and structs is `components/proto`; the behaviour is
 | `tools/nfcprog.py` | The protocol from the command line: `info`, `program --host H --pk N`, `wipe`, `cancel`, `hid on\|off`, `log LEVEL`, `monitor`, `bootloader`. Needs pyserial. |
 | `tools/webserial.html` | The same from a browser (Chrome or Edge), standing in for the InvenTree plugin page. |
 | `tools/test_sim.py` | Runs `nfcprog.py` against the host simulator. |
+| `tools/fake_plugin.py` | A stand-in for the InvenTree plugin's `/sync`, with endpoints to queue commands, read what the reader reported, and drop answers at random. |
+| `tools/test_sync.py` | The network link end to end: the host simulator against `fake_plugin.py` (a job once, a lossy link, a server that comes and goes, a reader restart, long polling). |
+| `tools/sync_bridge.py` | Presents a USB scanner to the InvenTree plugin as a network scanner, speaking its `/sync` exchange; the reference client for the network firmware. |
 | `tools/hid_check.py` | Checks keyboard output: turns it on for one session and reads back what a tap types. |
 | `tools/tag_checks.py` | Guided checks with real tags: says which tag to present, sends the jobs, checks the answers. |
 
@@ -125,9 +134,12 @@ What only real tags can confirm, and the set of tags to prepare for it, is in
 ## Layout
 
 ```
-main/                 start-up, the task that owns the reader, download mode, recovery guard
+main/                 start-up, the task that owns the reader and its links, download mode,
+                      recovery guard, the network link (net_link.c) and the updater (ota.c)
 components/app_core   the state machine: commands, tag events and time in; events out
 components/proto      JSON lines <-> commands and events
+components/net_sync   the exchange with the plugin, with no network in it
+components/wifi_sta   the Wi-Fi station; its join-and-retry policy is plain C
 components/ndef       NDEF parsing and the Type 2 TLV
 components/ntag21x    NTAG213/215/216: read, tear-safe write, verify, password
 components/pn532      frame codec and I2C driver
@@ -137,5 +149,29 @@ host_test/, host_sim/ host builds of everything above the drivers
 idf_ext.py            the flash hook
 ```
 
-`app_core`, `proto`, `ndef` and `ntag21x` are plain C with no ESP-IDF in them, which is what
-lets them run on the host, and what will let a network transport sit beside USB later.
+`app_core`, `proto`, `ndef`, `ntag21x`, `net_sync` and `wifi_policy` are plain C with no
+ESP-IDF in them, which is what lets them run on the host.
+
+## Network link
+
+With `CONFIG_APP_NET_ENABLE` (on in `sdkconfig.defaults`) the reader can also be driven by
+the InvenTree plugin over Wi-Fi: it polls the plugin's `/sync/` for jobs and reports back,
+and can be updated over the network. It stays off the air until told where to go, over USB:
+
+```sh
+python tools/nfcprog.py net join "workshop" --psk "..."
+python tools/nfcprog.py net server https://inventree.example/plugin/nfcscanner --token inv-...
+python tools/nfcprog.py net            # what it is doing
+```
+
+The reader id it presents is `nfc-<mac>`, shown by `net` and `info`; it must match an NFC
+Scanner machine in InvenTree, and the token must belong to that machine's user. Long
+polling is asked for by default (`wait_s` 25) and falls back by itself to a poll a second
+where the server does not hold. `CONFIG_APP_NET_ALLOW_HTTP` (on in `sdkconfig.defaults`,
+for the plugin's local Docker instance) lets `net server` and `ota` take http:// URLs;
+turn it off for a unit in use.
+
+The settings partition is encrypted, with keys derived from an eFuse HMAC key that the
+firmware burns itself on the first boot that finds eFuse block KEY0 empty. That burn is
+permanent. docs/network-transport-plan.md has the design, what the encryption does and
+does not protect against, and the state of each phase.

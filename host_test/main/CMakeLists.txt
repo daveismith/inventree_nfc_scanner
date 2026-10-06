@@ -5,5 +5,7 @@ idf_component_register(SRCS "test_main.c"
                             "test_ntag21x.c"
                             "test_proto.c"
                             "test_app_core.c"
+                            "test_net_sync.c"
+                            "test_wifi_policy.c"
                        INCLUDE_DIRS "."
-                       PRIV_REQUIRES unity ndef ntag21x pn532 app_core proto sim_ntag)
+                       PRIV_REQUIRES unity ndef ntag21x pn532 app_core proto net_sync wifi_sta sim_ntag)

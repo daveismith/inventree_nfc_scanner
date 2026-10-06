@@ -16,6 +16,9 @@
  *   !nfc off | on       the reader stops or starts answering
  *
  * Each is answered with {"sim":"ok"} or {"sim":"error"}.
+ *
+ * With SIM_SYNC_URL set (see sim_net.h) it also talks to a plugin, real or fake, over the
+ * network link, as the firmware does: the pty is link 0 and the plugin link 1.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -32,7 +35,12 @@
 
 #include "app_core.h"
 #include "proto.h"
+#include "sim_net.h"
 #include "sim_ntag.h"
+
+#define LINK_PTY    0
+#define LINK_NET    1
+#define NET_SYNC_CMD_MAX_LINE 2048
 
 static int s_master = -1;
 static app_core_t s_core;
@@ -69,9 +77,28 @@ static void env_emit(void *ctx, const app_evt_t *evt)
     (void)ctx;
     static char line[1024];
     const size_t n = proto_format(evt, line, sizeof(line));
-    if (n > 0) {
+    if (n == 0) {
+        return;
+    }
+    if (evt->origin == LINK_PTY || evt->origin == APP_ORIGIN_ALL) {
         write_all(line, n);
     }
+    if (evt->origin == LINK_NET || evt->origin == APP_ORIGIN_ALL) {
+        sim_net_queue(line, n);
+    }
+}
+
+static app_net_status_t s_net_status;
+
+static app_err_t env_net(void *ctx, const app_cmd_t *cmd, app_net_status_t *status, const char **detail)
+{
+    (void)ctx;
+    if (cmd->net_action != APP_NET_STATUS) {
+        *detail = "the simulator's network is set by environment variables";
+        return APP_ERR_BAD_ARG;
+    }
+    sim_net_status(status);
+    return APP_ERR_NONE;
 }
 
 static uint32_t env_now_ms(void *ctx)
@@ -93,6 +120,10 @@ static void env_sysinfo(void *ctx, app_sysinfo_t *out)
     out->pn532_rev = 6;
     out->reset = "poweron";
     out->uptime_ms = env_now_ms(NULL);
+    if (sim_net_configured()) {
+        sim_net_status(&s_net_status);
+        out->net = &s_net_status;
+    }
 }
 
 static void env_hid_type(void *ctx, const char *text)
@@ -155,6 +186,23 @@ static bool control(const char *line)
     return true;
 }
 
+/* A command line from link `origin`. */
+static void handle_command(uint8_t origin, const char *line, size_t len)
+{
+    static app_cmd_t cmd;
+    proto_err_t err;
+    if (proto_parse(line, len, &cmd, &err)) {
+        cmd.origin = origin;
+        cmd.remote = origin == LINK_NET;
+        app_core_command(&s_core, &cmd);
+        return;
+    }
+    app_evt_t evt;
+    proto_err_event(&err, &evt);
+    evt.origin = origin;
+    env_emit(NULL, &evt);
+}
+
 static void handle_line(const char *line, size_t len)
 {
     if (line[0] == '!') {
@@ -162,20 +210,7 @@ static void handle_line(const char *line, size_t len)
         write_all(reply, strlen(reply));
         return;
     }
-
-    static app_cmd_t cmd;
-    static char out[256];
-    proto_err_t err;
-    if (proto_parse(line, len, &cmd, &err)) {
-        app_core_command(&s_core, &cmd);
-        return;
-    }
-    app_evt_t evt;
-    proto_err_event(&err, &evt);
-    const size_t n = proto_format(&evt, out, sizeof(out));
-    if (n > 0) {
-        write_all(out, n);
-    }
+    handle_command(LINK_PTY, line, len);
 }
 
 /* What the firmware's poller does: report a tag once when it arrives, and offer it again if
@@ -240,8 +275,10 @@ void app_main(void)
         .sysinfo = env_sysinfo,
         .hid_type = env_hid_type,
         .enter_bootloader = env_enter_bootloader,
+        .net = sim_net_configured() ? env_net : NULL,
     };
     app_core_init(&s_core, &env, true);
+    sim_net_init();
     app_core_nfc_state(&s_core, true);
     sim_ntag_init(&s_sim, NTAG_215);
     s_sim.present = false;
@@ -281,6 +318,10 @@ void app_main(void)
         }
         app_core_tick(&s_core);
         poll_tag();
+        static char net_cmd[NET_SYNC_CMD_MAX_LINE];
+        while (sim_net_step(net_cmd, sizeof(net_cmd))) {
+            handle_command(LINK_NET, net_cmd, strlen(net_cmd));
+        }
         if (n <= 0) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }

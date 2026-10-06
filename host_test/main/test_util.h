@@ -16,3 +16,5 @@ void run_pn532_frame_tests(void);
 void run_ntag21x_tests(void);
 void run_proto_tests(void);
 void run_app_core_tests(void);
+void run_net_sync_tests(void);
+void run_wifi_policy_tests(void);

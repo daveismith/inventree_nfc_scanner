@@ -14,5 +14,7 @@ list(APPEND EXTRA_COMPONENT_DIRS
      "../components/pn532"
      "../components/app_core"
      "../components/proto"
+     "../components/net_sync"
+     "../components/wifi_sta"
      "components/sim_ntag")
 project(host_test)

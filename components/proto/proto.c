@@ -189,6 +189,124 @@ static bool parse_log(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
     return fail(err, APP_ERR_BAD_ARG, "level: expected off, error, warn, info or debug");
 }
 
+/* An optional string of at most `cap - 1` bytes. *present says whether it was there. */
+static bool get_string(const cJSON *obj, const char *name, char *out, size_t cap, bool *present, proto_err_t *err)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, name);
+    *present = item != NULL;
+    if (item == NULL) {
+        return true;
+    }
+    if (!cJSON_IsString(item) || strlen(item->valuestring) >= cap) {
+        char detail[sizeof(err->detail)];
+        snprintf(detail, sizeof(detail), "%s: expected a string of up to %u characters", name, (unsigned)(cap - 1));
+        return fail(err, APP_ERR_BAD_ARG, detail);
+    }
+    strcpy(out, item->valuestring);
+    return true;
+}
+
+static bool get_uint(const cJSON *obj, const char *name, double lo, double hi, uint32_t *out, bool *present, proto_err_t *err)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, name);
+    *present = item != NULL;
+    if (item == NULL) {
+        return true;
+    }
+    double v;
+    if (!as_integer(item, lo, hi, &v)) {
+        char detail[sizeof(err->detail)];
+        snprintf(detail, sizeof(detail), "%s: expected %.0f to %.0f", name, lo, hi);
+        return fail(err, APP_ERR_BAD_ARG, detail);
+    }
+    *out = (uint32_t)v;
+    return true;
+}
+
+static bool looks_like_url(const char *s)
+{
+    return strncmp(s, "http://", 7) == 0 || strncmp(s, "https://", 8) == 0;
+}
+
+/*
+ * {"cmd":"net"}                                                   report
+ * {"cmd":"net","action":"join","ssid":"...","psk":"..."}          remember and join
+ * {"cmd":"net","action":"forget","ssid":"..."}
+ * {"cmd":"net","action":"server","url":"https://...","token":"..."}
+ * {"cmd":"net","action":"poll","poll_ms":1000,"wait_s":25}
+ * {"cmd":"net","enabled":false}                                   with or without an action
+ */
+static bool parse_net(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
+{
+    bool has_ssid, has_psk, has_url, has_action;
+    char action[16];
+    if (!get_string(obj, "action", action, sizeof(action), &has_action, err)
+            || !get_string(obj, "ssid", cmd->ssid, sizeof(cmd->ssid), &has_ssid, err)
+            || !get_string(obj, "psk", cmd->psk, sizeof(cmd->psk), &has_psk, err)
+            || !get_string(obj, "url", cmd->url, sizeof(cmd->url), &has_url, err)
+            || !get_string(obj, "token", cmd->token, sizeof(cmd->token), &cmd->has_token, err)
+            || !get_uint(obj, "poll_ms", 100, 60000, &cmd->poll_ms, &cmd->has_poll_ms, err)
+            || !get_uint(obj, "wait_s", 0, 300, &cmd->wait_s, &cmd->has_wait_s, err)) {
+        return false;
+    }
+    const cJSON *enabled = cJSON_GetObjectItemCaseSensitive(obj, "enabled");
+    cmd->has_enabled = enabled != NULL;
+    if (cmd->has_enabled && !get_bool(obj, "enabled", true, &cmd->enabled, err)) {
+        return false;
+    }
+
+    if (!has_action) {
+        cmd->net_action = APP_NET_STATUS;
+        return true;
+    }
+    if (strcmp(action, "join") == 0) {
+        cmd->net_action = APP_NET_JOIN;
+        if (!has_ssid || cmd->ssid[0] == '\0') {
+            return fail(err, APP_ERR_BAD_ARG, "ssid: required");
+        }
+        const size_t n = strlen(cmd->psk);
+        if (n != 0 && n < 8) {
+            return fail(err, APP_ERR_BAD_ARG, "psk: 8 to 64 characters, or none for an open network");
+        }
+        return true;
+    }
+    if (strcmp(action, "forget") == 0) {
+        cmd->net_action = APP_NET_FORGET;
+        if (!has_ssid || cmd->ssid[0] == '\0') {
+            return fail(err, APP_ERR_BAD_ARG, "ssid: required");
+        }
+        return true;
+    }
+    if (strcmp(action, "server") == 0) {
+        cmd->net_action = APP_NET_SERVER;
+        if (!has_url || !looks_like_url(cmd->url)) {
+            return fail(err, APP_ERR_BAD_ARG, "url: required, beginning http:// or https://");
+        }
+        return true;
+    }
+    if (strcmp(action, "poll") == 0) {
+        cmd->net_action = APP_NET_POLL;
+        if (!cmd->has_poll_ms && !cmd->has_wait_s) {
+            return fail(err, APP_ERR_BAD_ARG, "poll: give poll_ms, wait_s or both");
+        }
+        return true;
+    }
+    return fail(err, APP_ERR_BAD_ARG, "action: expected join, forget, server or poll");
+}
+
+/* {"cmd":"ota","url":"https://...","sha256":"<64 hex>"} */
+static bool parse_ota(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
+{
+    bool has_url;
+    if (!get_string(obj, "url", cmd->ota_url, sizeof(cmd->ota_url), &has_url, err)) {
+        return false;
+    }
+    if (!has_url || !looks_like_url(cmd->ota_url)) {
+        return fail(err, APP_ERR_BAD_ARG, "url: required, beginning http:// or https://");
+    }
+    return get_hex_exact(obj, "sha256", cmd->sha256, sizeof(cmd->sha256), &cmd->has_sha256, err);
+}
+
 static bool parse_debug(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
 {
     const cJSON *action = cJSON_GetObjectItemCaseSensitive(obj, "action");
@@ -256,6 +374,14 @@ bool proto_parse(const char *line, size_t len, app_cmd_t *cmd, proto_err_t *err)
         cmd->type = APP_CMD_DEBUG;
         err->cmd = app_cmd_name(cmd->type);
         ok = parse_debug(obj, cmd, err);
+    } else if (strcmp(name->valuestring, "net") == 0) {
+        cmd->type = APP_CMD_NET;
+        err->cmd = app_cmd_name(cmd->type);
+        ok = parse_net(obj, cmd, err);
+    } else if (strcmp(name->valuestring, "ota") == 0) {
+        cmd->type = APP_CMD_OTA;
+        err->cmd = app_cmd_name(cmd->type);
+        ok = parse_ota(obj, cmd, err);
     } else {
         ok = fail(err, APP_ERR_UNKNOWN_CMD, "");
     }
@@ -320,6 +446,24 @@ static void add_string_or_null(cJSON *obj, const char *name, const char *value)
     }
 }
 
+/* The network side, flattened into `obj`. A passphrase and the token are never reported. */
+static void add_net(cJSON *obj, const app_net_status_t *net)
+{
+    cJSON_AddBoolToObject(obj, "enabled", net->enabled);
+    add_string(obj, "wifi", net->wifi);
+    add_string_or_null(obj, "ssid", net->ssid);
+    add_string_or_null(obj, "ip", net->ip);
+    add_string_or_null(obj, "url", net->url);
+    cJSON_AddBoolToObject(obj, "token", net->has_token);
+    add_string(obj, "reader", net->reader);
+    add_string(obj, "link", net->link);
+    cJSON_AddNumberToObject(obj, "last_status", net->last_status);
+    cJSON_AddNumberToObject(obj, "poll_ms", net->poll_ms);
+    cJSON_AddNumberToObject(obj, "wait_s", net->wait_s);
+    cJSON_AddNumberToObject(obj, "queued", net->queued);
+    cJSON_AddNumberToObject(obj, "dropped", net->dropped);
+}
+
 static void add_info(cJSON *obj, const app_evt_t *evt)
 {
     const app_sysinfo_t *sys = evt->sys;
@@ -354,6 +498,11 @@ static void add_info(cJSON *obj, const app_evt_t *evt)
     add_string(obj, "reset", sys->reset);
     add_string_or_null(obj, "crash", sys->crash);
     cJSON_AddNumberToObject(obj, "uptime_ms", sys->uptime_ms);
+    if (sys->net) {
+        add_net(cJSON_AddObjectToObject(obj, "net"), sys->net);
+    } else {
+        cJSON_AddNullToObject(obj, "net");
+    }
 }
 
 static void add_error(cJSON *obj, const app_evt_t *evt)
@@ -452,6 +601,8 @@ size_t proto_format(const app_evt_t *evt, char *out, size_t cap)
             add_info(obj, evt);
         } else if (evt->has_hid) {
             cJSON_AddBoolToObject(obj, "enabled", evt->hid);
+        } else if (evt->net) {
+            add_net(obj, evt->net);
         }
         break;
     case APP_EVT_HELLO:
@@ -505,6 +656,17 @@ size_t proto_format(const app_evt_t *evt, char *out, size_t cap)
         break;
     case APP_EVT_ERROR:
         cJSON_AddStringToObject(obj, "evt", "error");
+        add_error(obj, evt);
+        break;
+    case APP_EVT_NET:
+        cJSON_AddStringToObject(obj, "evt", "net");
+        if (evt->net) {
+            add_net(obj, evt->net);
+        }
+        break;
+    case APP_EVT_OTA:
+        cJSON_AddStringToObject(obj, "evt", "ota");
+        add_string(obj, "state", evt->state);
         add_error(obj, evt);
         break;
     case APP_EVT_LOG:

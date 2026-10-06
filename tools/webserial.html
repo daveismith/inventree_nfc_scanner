@@ -93,6 +93,34 @@
     <div id="ndef"></div>
   </section>
 
+  <section id="netpanel">
+    <h2>Network link <span id="netstate" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div class="row">
+      <label>Wi-Fi network <input id="ssid" type="text" spellcheck="false"></label>
+      <label>Passphrase <input id="psk" type="password"></label>
+      <button id="join" disabled>Join</button>
+      <button id="forget" disabled>Forget</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label>Plugin URL <input id="url" type="text" style="width:320px" placeholder="https://inventree.example/plugin/nfcscanner" spellcheck="false"></label>
+      <label>API token <input id="token" type="password" style="width:200px"></label>
+      <button id="server" disabled>Set server</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label>Idle poll ms <input id="pollms" type="number" min="100" max="60000" style="width:90px"></label>
+      <label>Hold s <input id="waits" type="number" min="0" max="300" style="width:70px"></label>
+      <button id="poll" disabled>Set pacing</button>
+      <button id="netenable" disabled>Enable</button>
+      <button id="netdisable" disabled>Disable</button>
+      <button id="netstatus" disabled>Refresh</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label>Firmware image URL <input id="otaurl" type="text" style="width:320px" placeholder="https://.../inventree_nfc_scanner.bin" spellcheck="false"></label>
+      <label>SHA-256 <input id="otasha" type="text" style="width:200px" placeholder="optional" spellcheck="false"></label>
+      <button id="ota" disabled>Update</button>
+    </div>
+  </section>
+
   <section>
     <h2>Lines</h2>
     <pre id="log"></pre>
@@ -125,7 +153,8 @@ const toHex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).j
 
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
-  const whenConnected = ['info', 'bootloader', 'hid', 'loglevel', 'program', 'cancel', 'wipe'];
+  const whenConnected = ['info', 'bootloader', 'hid', 'loglevel', 'program', 'cancel', 'wipe',
+                         'join', 'forget', 'server', 'poll', 'netenable', 'netdisable', 'netstatus', 'ota'];
   let port = null, writer = null, nextId = 1;
 
   function log(text, cls) {
@@ -153,10 +182,31 @@ if (typeof document !== 'undefined') {
     await writer.write(new TextEncoder().encode(line + '\n'));
   }
 
+  // The network side, as `info`, `net` and the net event report it.
+  function showNet(net) {
+    if (!net) {
+      $('netstate').textContent = ' (not in this build)';
+      $('netpanel').style.opacity = 0.5;
+      return;
+    }
+    $('netpanel').style.opacity = 1;
+    const wifi = net.wifi === 'connected' ? `${net.ssid} ${net.ip}` : `${net.wifi}${net.ssid ? ' ' + net.ssid : ''}`;
+    $('netstate').textContent = ` ${net.enabled ? 'on' : 'off'}, wifi ${wifi}, plugin ${net.link}` +
+      `${net.last_status ? ' (' + net.last_status + ')' : ''}, ${net.queued} queued, reader ${net.reader}`;
+    if (net.url && !$('url').value) $('url').value = net.url;
+    if (!$('pollms').value) $('pollms').value = net.poll_ms;
+    if (!$('waits').value) $('waits').value = net.wait_s;
+  }
+
   function onMessage(msg) {
     if (msg.rsp === 'info' && msg.ok) {
       const reader = msg.pn532 ? `PN532 ${msg.pn532.ver}` : 'no reader';
       status(`fw ${msg.fw}, ${reader}, ${msg.state}`, msg.pn532 ? 'good' : 'warn');
+      showNet(msg.net);
+    } else if ((msg.rsp === 'net' && msg.ok) || msg.evt === 'net') {
+      showNet(msg);
+    } else if (msg.evt === 'ota') {
+      status(`Update: ${msg.state}${msg.detail ? ' (' + msg.detail + ')' : ''}`, msg.state === 'failed' ? 'bad' : 'warn');
     } else if (msg.rsp && !msg.ok) {
       status(`${msg.rsp}: ${msg.error}${msg.detail ? ' (' + msg.detail + ')' : ''}`, 'bad');
     } else if (msg.evt === 'waiting') {
@@ -252,6 +302,22 @@ if (typeof document !== 'undefined') {
     if ($('overwrite').checked) obj.overwrite = true;
     const pack = $('pack').value.trim();
     if (pack) obj.pack = pack.toUpperCase();
+    return send(obj);
+  });
+  $('join').onclick = guard(() => send({ cmd: 'net', action: 'join', ssid: $('ssid').value.trim(), psk: $('psk').value }));
+  $('forget').onclick = guard(() => send({ cmd: 'net', action: 'forget', ssid: $('ssid').value.trim() }));
+  $('server').onclick = guard(() => {
+    const obj = { cmd: 'net', action: 'server', url: $('url').value.trim() };
+    if ($('token').value) obj.token = $('token').value;
+    return send(obj);
+  });
+  $('poll').onclick = guard(() => send({ cmd: 'net', action: 'poll', poll_ms: Number($('pollms').value), wait_s: Number($('waits').value) }));
+  $('netenable').onclick = guard(() => send({ cmd: 'net', enabled: true }));
+  $('netdisable').onclick = guard(() => send({ cmd: 'net', enabled: false }));
+  $('netstatus').onclick = guard(() => send({ cmd: 'net' }));
+  $('ota').onclick = guard(() => {
+    const obj = { cmd: 'ota', url: $('otaurl').value.trim() };
+    if ($('otasha').value.trim()) obj.sha256 = $('otasha').value.trim();
     return send(obj);
   });
   ['host', 'pk', 'scheme'].forEach(id => { $(id).oninput = showNdef; });

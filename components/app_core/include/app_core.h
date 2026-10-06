@@ -47,6 +47,10 @@ typedef struct {
     void (*set_log_level)(void *ctx, app_log_level_t level);    /* optional */
     void (*enter_bootloader)(void *ctx);                        /* optional */
     void (*debug)(void *ctx, app_debug_action_t action);        /* optional; absent, `debug` is unknown */
+    /* Optional; absent, `net` and `ota` are unknown commands. On success `net` fills in the
+     * status for the answer; on failure both may name a detail. */
+    app_err_t (*net)(void *ctx, const app_cmd_t *cmd, app_net_status_t *status, const char **detail);
+    app_err_t (*ota)(void *ctx, const app_cmd_t *cmd, const char **detail);
 } app_env_t;
 
 /* A tag as the reader's anticollision saw it. */
@@ -61,8 +65,9 @@ typedef struct {
     app_env_t env;
     bool nfc_ok;
     bool hid_default;
-    bool hid_override_set;      /* a `hid` command this session, until the link drops */
+    bool hid_override_set;      /* a `hid` command this session, until the link that sent it drops */
     bool hid_override;
+    uint8_t hid_override_origin;
     uint8_t auth0;
     bool tag_here;              /* a tag is on the reader, and has been reported or written */
     app_tag_t here;
@@ -99,8 +104,13 @@ void app_core_tag_removed(app_core_t *core, const app_tag_t *tag);
 /* The reader started or stopped answering. */
 void app_core_nfc_state(app_core_t *core, bool ok);
 
-/* A host opened or closed the link. A per-session `hid` setting ends with the session. */
-void app_core_link(app_core_t *core, bool up);
+/*
+ * A host opened or closed a link. Up, it is greeted with `hello`. Down, what it owned goes
+ * with it: a job it started and is no longer there to see through is cancelled, and a
+ * per-session `hid` setting ends. A link that is never closed, such as the plugin's, keeps
+ * its jobs through a lapse in the network and leaves them to their own timeout.
+ */
+void app_core_link(app_core_t *core, uint8_t origin, bool up);
 
 bool app_core_hid_enabled(const app_core_t *core);
 const char *app_core_state_name(const app_core_t *core);

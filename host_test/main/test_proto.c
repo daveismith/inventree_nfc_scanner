@@ -159,6 +159,76 @@ static void test_parse_rejects_bad_arguments(void)
     assert_rejected("{\"cmd\":\"debug\",\"action\":\"explode\"}", APP_ERR_BAD_ARG, "debug");
 }
 
+static void test_parse_net_and_ota(void)
+{
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"net\"}"));
+    TEST_ASSERT_EQUAL(APP_CMD_NET, s_cmd.type);
+    TEST_ASSERT_EQUAL(APP_NET_STATUS, s_cmd.net_action);
+    TEST_ASSERT_FALSE(s_cmd.has_enabled);
+
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"net\",\"enabled\":false}"));
+    TEST_ASSERT_EQUAL(APP_NET_STATUS, s_cmd.net_action);
+    TEST_ASSERT_TRUE(s_cmd.has_enabled);
+    TEST_ASSERT_FALSE(s_cmd.enabled);
+
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"net\",\"action\":\"join\",\"ssid\":\"workshop\"}"));
+    TEST_ASSERT_EQUAL(APP_NET_JOIN, s_cmd.net_action);
+    TEST_ASSERT_EQUAL_STRING("", s_cmd.psk);           /* an open network */
+
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"net\",\"action\":\"server\",\"url\":\"https://h.example/plugin/nfcscanner\",\"token\":\"inv-abc\"}"));
+    TEST_ASSERT_EQUAL(APP_NET_SERVER, s_cmd.net_action);
+    TEST_ASSERT_EQUAL_STRING("https://h.example/plugin/nfcscanner", s_cmd.url);
+    TEST_ASSERT_TRUE(s_cmd.has_token);
+    TEST_ASSERT_EQUAL_STRING("inv-abc", s_cmd.token);
+
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"net\",\"action\":\"poll\",\"wait_s\":0}"));
+    TEST_ASSERT_EQUAL(APP_NET_POLL, s_cmd.net_action);
+    TEST_ASSERT_TRUE(s_cmd.has_wait_s);
+    TEST_ASSERT_FALSE(s_cmd.has_poll_ms);
+    TEST_ASSERT_EQUAL(0, s_cmd.wait_s);
+
+    assert_rejected("{\"cmd\":\"net\",\"action\":\"join\"}", APP_ERR_BAD_ARG, "net");
+    assert_rejected("{\"cmd\":\"net\",\"action\":\"join\",\"ssid\":\"x\",\"psk\":\"short\"}", APP_ERR_BAD_ARG, "net");
+    assert_rejected("{\"cmd\":\"net\",\"action\":\"server\",\"url\":\"ftp://h\"}", APP_ERR_BAD_ARG, "net");
+    assert_rejected("{\"cmd\":\"net\",\"action\":\"poll\"}", APP_ERR_BAD_ARG, "net");
+    assert_rejected("{\"cmd\":\"net\",\"action\":\"poll\",\"poll_ms\":10}", APP_ERR_BAD_ARG, "net");
+    assert_rejected("{\"cmd\":\"net\",\"action\":\"fly\"}", APP_ERR_BAD_ARG, "net");
+    assert_rejected("{\"cmd\":\"net\",\"enabled\":1}", APP_ERR_BAD_ARG, "net");
+
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\",\"sha256\":\""
+                           "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}"));
+    TEST_ASSERT_EQUAL(APP_CMD_OTA, s_cmd.type);
+    TEST_ASSERT_TRUE(s_cmd.has_sha256);
+    TEST_ASSERT_EQUAL_HEX8(0x01, s_cmd.sha256[0]);
+    TEST_ASSERT_EQUAL_HEX8(0xEF, s_cmd.sha256[31]);
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"ota\",\"url\":\"http://10.0.0.2:8000/fw.bin\"}"));
+    TEST_ASSERT_FALSE(s_cmd.has_sha256);
+    assert_rejected("{\"cmd\":\"ota\"}", APP_ERR_BAD_ARG, "ota");
+    assert_rejected("{\"cmd\":\"ota\",\"url\":\"https://h/fw\",\"sha256\":\"abc\"}", APP_ERR_BAD_ARG, "ota");
+}
+
+static void test_format_net_and_ota_events(void)
+{
+    const app_net_status_t net = {
+        .enabled = true, .wifi = "connecting", .ssid = "workshop", .reader = "nfc-34b7da52a084",
+        .link = "off", .poll_ms = 1000, .wait_s = 25,
+    };
+    app_evt_t evt = { .type = APP_EVT_NET, .net = &net };
+    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"net\",\"enabled\":true,\"wifi\":\"connecting\",\"ssid\":\"workshop\","
+                             "\"ip\":null,\"url\":null,\"token\":false,\"reader\":\"nfc-34b7da52a084\",\"link\":\"off\","
+                             "\"last_status\":0,\"poll_ms\":1000,\"wait_s\":25,\"queued\":0,\"dropped\":0}", format(&evt));
+
+    app_evt_t ota = { .type = APP_EVT_OTA, .state = "failed", .error = APP_ERR_NFC_ERROR, .detail = "image too large" };
+    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"ota\",\"state\":\"failed\",\"error\":\"nfc_error\",\"detail\":\"image too large\"}", format(&ota));
+
+    /* info carries the network side too, or says there is none */
+    app_sysinfo_t sys = { .fw = "0.2.0", .idf = "v6.1", .reset = "poweron", .net = &net };
+    app_evt_t info = { .type = APP_EVT_RSP, .cmd = "info", .ok = true, .sys = &sys, .state = "idle", .has_hid = true };
+    TEST_ASSERT_NOT_NULL(strstr(format(&info), ",\"uptime_ms\":0,\"net\":{\"enabled\":true,\"wifi\":\"connecting\""));
+    sys.net = NULL;
+    TEST_ASSERT_NOT_NULL(strstr(format(&info), ",\"uptime_ms\":0,\"net\":null}"));
+}
+
 static void test_parse_accepts_the_largest_message_a_line_can_carry(void)
 {
     /* NTAG216 holds 867 bytes of message; in hex, with the rest of the command, that must
@@ -260,7 +330,7 @@ static void test_format_responses(void)
     TEST_ASSERT_EQUAL_STRING(
         "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"idf\":\"v6.1\","
         "\"pn532\":{\"ic\":50,\"ver\":\"1.6\"},\"state\":\"idle\",\"job\":null,\"tag\":null,\"hid\":true,"
-        "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":null,\"uptime_ms\":1234}", format(&evt));
+        "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":null,\"uptime_ms\":1234,\"net\":null}", format(&evt));
 
     sys.pn532_ok = false;
     sys.crash = "panic in \"nfc_app\"";
@@ -272,7 +342,7 @@ static void test_format_responses(void)
     TEST_ASSERT_EQUAL_STRING(
         "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"idf\":\"v6.1\","
         "\"pn532\":null,\"state\":\"nfc_error\",\"job\":7,\"tag\":\"04A1B2C3D4E5F6\",\"hid\":true,"
-        "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":\"panic in \\\"nfc_app\\\"\",\"uptime_ms\":1234}",
+        "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":\"panic in \\\"nfc_app\\\"\",\"uptime_ms\":1234,\"net\":null}",
         format(&evt));
 
     evt = (app_evt_t){ .type = APP_EVT_RSP, .cmd = "program", .ok = false, .error = APP_ERR_BUSY, .has_id = true, .id = 8 };
@@ -308,6 +378,8 @@ void run_proto_tests(void)
     RUN_TEST(test_parse_program);
     RUN_TEST(test_parse_rejects_malformed_lines);
     RUN_TEST(test_parse_rejects_bad_arguments);
+    RUN_TEST(test_parse_net_and_ota);
+    RUN_TEST(test_format_net_and_ota_events);
     RUN_TEST(test_parse_accepts_the_largest_message_a_line_can_carry);
     RUN_TEST(test_parse_errors_become_lines);
     RUN_TEST(test_format_job_events);

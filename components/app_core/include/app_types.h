@@ -23,6 +23,19 @@ extern "C" {
 #define APP_JOB_TIMEOUT_MIN_MS      1000
 #define APP_JOB_TIMEOUT_MAX_MS      600000
 
+/*
+ * Where a command came from, and where its answer goes. The device has more than one host:
+ * the USB page, and a plugin reached over the network. Each is a link with a number of its
+ * own; `rsp` and `hello` go to the link concerned, every other event to all of them.
+ */
+#define APP_ORIGIN_ALL          0xFF
+
+#define APP_NET_SSID_MAX        32
+#define APP_NET_PSK_MAX         64
+#define APP_NET_URL_MAX         160
+#define APP_NET_TOKEN_MAX       96
+#define APP_OTA_URL_MAX         256
+
 typedef enum {
     APP_ERR_NONE = 0,
     APP_ERR_BAD_JSON,
@@ -44,6 +57,7 @@ typedef enum {
     APP_ERR_WRITE_FAILED,
     APP_ERR_VERIFY_FAILED,
     APP_ERR_NFC_ERROR,
+    APP_ERR_NOT_ALLOWED,        /* not from this link: `bootloader` from the network, say */
 } app_err_t;
 
 typedef enum {
@@ -55,7 +69,18 @@ typedef enum {
     APP_CMD_LOG,
     APP_CMD_BOOTLOADER,
     APP_CMD_DEBUG,              /* development builds only: provoke a failure on purpose */
+    APP_CMD_NET,                /* network builds only: the Wi-Fi and plugin settings */
+    APP_CMD_OTA,                /* network builds only: fetch and install a new firmware */
 } app_cmd_type_t;
+
+typedef enum {
+    APP_NET_STATUS,             /* no action: report */
+    APP_NET_JOIN,               /* remember a network and join it */
+    APP_NET_FORGET,
+    APP_NET_SERVER,             /* the plugin's URL and token */
+    APP_NET_POLL,               /* pacing */
+    APP_NET_ENABLE,             /* on or off the air */
+} app_net_action_t;
 
 typedef enum {
     APP_DEBUG_CRASH,            /* panic */
@@ -73,6 +98,8 @@ typedef enum {
 
 typedef struct {
     app_cmd_type_t type;
+    uint8_t origin;             /* the link it came from; the link its `rsp` goes to */
+    bool remote;                /* from a link that is not in hand: some commands are refused */
     bool has_id;
     int32_t id;
 
@@ -96,7 +123,42 @@ typedef struct {
 
     /* debug */
     app_debug_action_t debug;
+
+    /* net */
+    app_net_action_t net_action;
+    char ssid[APP_NET_SSID_MAX + 1];
+    char psk[APP_NET_PSK_MAX + 1];
+    char url[APP_NET_URL_MAX + 1];
+    char token[APP_NET_TOKEN_MAX + 1];
+    bool has_token;
+    bool has_poll_ms;
+    uint32_t poll_ms;
+    bool has_wait_s;
+    uint32_t wait_s;
+    bool has_enabled;           /* net: `enabled` was given */
+
+    /* ota */
+    char ota_url[APP_OTA_URL_MAX + 1];
+    bool has_sha256;
+    uint8_t sha256[32];
 } app_cmd_t;
+
+/* The network side as `net` and `info` report it. Strings live as long as the firmware runs. */
+typedef struct {
+    bool enabled;
+    const char *wifi;           /* "off", "no_network", "connecting", "connected" */
+    const char *ssid;           /* the network joined or being joined, else NULL */
+    const char *ip;             /* NULL unless connected */
+    const char *url;            /* the plugin's URL, else NULL */
+    bool has_token;
+    const char *reader;         /* this device's reader id */
+    const char *link;           /* "off", "ok", "unreachable", "refused", "error" */
+    int last_status;            /* the last HTTP status, 0 for none yet */
+    uint32_t poll_ms;
+    uint32_t wait_s;
+    uint32_t queued;            /* messages waiting for the server to acknowledge */
+    uint32_t dropped;           /* taps dropped because the queue was full */
+} app_net_status_t;
 
 /* What `info` reports that the state machine does not itself know. */
 typedef struct {
@@ -110,6 +172,7 @@ typedef struct {
     const char *reset;          /* why the chip last reset */
     const char *crash;          /* one line about the last crash, or NULL */
     uint32_t uptime_ms;
+    const app_net_status_t *net;    /* NULL in a build without the network */
 } app_sysinfo_t;
 
 typedef enum {
@@ -123,11 +186,14 @@ typedef enum {
     APP_EVT_TAG_REMOVED,
     APP_EVT_ERROR,              /* a line that could not be read as a command at all */
     APP_EVT_LOG,
+    APP_EVT_NET,                /* the network link changed state */
+    APP_EVT_OTA,                /* an update is progressing, done, or failed */
 } app_evt_type_t;
 
 /* One event. Which fields mean anything depends on `type`; unused pointers are NULL. */
 typedef struct {
     app_evt_type_t type;
+    uint8_t origin;             /* the link this goes to, or APP_ORIGIN_ALL */
 
     const char *cmd;            /* RSP: the command being answered */
     bool ok;
@@ -155,6 +221,9 @@ typedef struct {
     /* RSP to info and hid */
     bool has_hid;
     bool hid;
+
+    /* RSP to net, and NET */
+    const app_net_status_t *net;
 
     /* LOG */
     char lvl;

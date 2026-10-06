@@ -25,6 +25,11 @@
 #include "sysinfo.h"
 #include "usb_dev.h"
 
+#if CONFIG_APP_NET_ENABLE
+#include "net_link.h"
+#include "ota.h"
+#endif
+
 /* A bool Kconfig option that is off is not defined at all. */
 #ifdef CONFIG_APP_LED_ORDER_GRB
 #define LED_ORDER_GRB true
@@ -37,19 +42,25 @@ static const char *TAG = "main";
 static void on_line(void *ctx, const char *line, size_t len)
 {
     (void)ctx;
-    app_task_line(line, len);
+    app_task_line(APP_LINK_USB, line, len);
 }
 
 static void on_line_too_long(void *ctx)
 {
     (void)ctx;
-    app_task_line_too_long();
+    app_task_line_too_long(APP_LINK_USB);
 }
 
 static void on_link(void *ctx, bool up)
 {
     (void)ctx;
-    app_task_link(up);
+    app_task_link(APP_LINK_USB, up);
+}
+
+static void usb_send(void *ctx, const char *line, size_t len)
+{
+    (void)ctx;
+    usb_cdc_send(line, len, 100);
 }
 
 static void on_mount(void *ctx, bool mounted)
@@ -57,6 +68,9 @@ static void on_mount(void *ctx, bool mounted)
     (void)ctx;
     if (mounted) {
         dev_recovery_usb_mounted();
+#if CONFIG_APP_NET_ENABLE
+        ota_note_host_ok();
+#endif
     }
 }
 
@@ -80,6 +94,7 @@ void app_main(void)
     app_download_mode_init();
     dev_recovery_init();
     app_task_init();
+    app_task_add_link(APP_LINK_USB, false, usb_send, NULL);
 
     const usb_dev_config_t usb = {
         .on_line = on_line,
@@ -101,6 +116,10 @@ void app_main(void)
     sysinfo_init();
     log_forward_init();
     settings_init();
+#if CONFIG_APP_NET_ENABLE
+    ota_init();
+    net_link_init();
+#endif
 
     const feedback_config_t fb = {
         .led_gpio = CONFIG_APP_LED_GPIO,

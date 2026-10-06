@@ -25,6 +25,7 @@ const char *app_err_name(app_err_t err)
     case APP_ERR_WRITE_FAILED:   return "write_failed";
     case APP_ERR_VERIFY_FAILED:  return "verify_failed";
     case APP_ERR_NFC_ERROR:      return "nfc_error";
+    case APP_ERR_NOT_ALLOWED:    return "not_allowed";
     }
     return "unknown";
 }
@@ -40,6 +41,8 @@ const char *app_cmd_name(app_cmd_type_t type)
     case APP_CMD_LOG:        return "log";
     case APP_CMD_BOOTLOADER: return "bootloader";
     case APP_CMD_DEBUG:      return "debug";
+    case APP_CMD_NET:        return "net";
+    case APP_CMD_OTA:        return "ota";
     }
     return "unknown";
 }
@@ -67,6 +70,13 @@ static void emit(app_core_t *core, const app_evt_t *evt)
     core->env.emit(core->env.ctx, evt);
 }
 
+/* An event every link gets. */
+static void broadcast(app_core_t *core, app_evt_t *evt)
+{
+    evt->origin = APP_ORIGIN_ALL;
+    emit(core, evt);
+}
+
 static void feedback(app_core_t *core, app_feedback_t fb)
 {
     if (core->env.feedback) {
@@ -81,17 +91,24 @@ static void set_uid(app_evt_t *evt, const app_tag_t *tag)
 }
 
 /* The answer to a command: ok, or not and why. */
-static void respond(app_core_t *core, const app_cmd_t *cmd, app_err_t error)
+static void respond_detail(app_core_t *core, const app_cmd_t *cmd, app_err_t error, const char *detail)
 {
     app_evt_t evt = {
         .type = APP_EVT_RSP,
+        .origin = cmd->origin,
         .cmd = app_cmd_name(cmd->type),
         .ok = error == APP_ERR_NONE,
         .error = error,
+        .detail = detail,
         .has_id = cmd->has_id,
         .id = cmd->id,
     };
     emit(core, &evt);
+}
+
+static void respond(app_core_t *core, const app_cmd_t *cmd, app_err_t error)
+{
+    respond_detail(core, cmd, error, NULL);
 }
 
 bool app_core_hid_enabled(const app_core_t *core)
@@ -137,7 +154,7 @@ static void job_failed(app_core_t *core, app_err_t error, app_evt_t *evt)
     evt->has_id = true;
     evt->id = core->job.id;
     core->job_active = false;
-    emit(core, evt);
+    broadcast(core, evt);
     feedback(core, APP_FB_JOB_FAILED);
     show_resting_state(core);
 }
@@ -148,6 +165,7 @@ static void cmd_info(app_core_t *core, const app_cmd_t *cmd)
     core->env.sysinfo(core->env.ctx, &sys);
     app_evt_t evt = {
         .type = APP_EVT_RSP,
+        .origin = cmd->origin,
         .cmd = app_cmd_name(cmd->type),
         .ok = true,
         .sys = &sys,
@@ -184,7 +202,7 @@ static void cmd_job(app_core_t *core, const app_cmd_t *cmd)
         .id = cmd->id,
         .timeout_ms = cmd->timeout_ms,
     };
-    emit(core, &evt);
+    broadcast(core, &evt);
     show_resting_state(core);
 }
 
@@ -209,9 +227,11 @@ static void cmd_hid(app_core_t *core, const app_cmd_t *cmd)
     } else {
         core->hid_override_set = true;
         core->hid_override = cmd->enabled;
+        core->hid_override_origin = cmd->origin;
     }
     app_evt_t evt = {
         .type = APP_EVT_RSP,
+        .origin = cmd->origin,
         .cmd = app_cmd_name(cmd->type),
         .ok = true,
         .has_hid = true,
@@ -220,8 +240,38 @@ static void cmd_hid(app_core_t *core, const app_cmd_t *cmd)
     emit(core, &evt);
 }
 
+static void cmd_net(app_core_t *core, const app_cmd_t *cmd)
+{
+    app_net_status_t status = { 0 };
+    const char *detail = NULL;
+    const app_err_t err = core->env.net(core->env.ctx, cmd, &status, &detail);
+    if (err != APP_ERR_NONE) {
+        respond_detail(core, cmd, err, detail);
+        return;
+    }
+    app_evt_t evt = {
+        .type = APP_EVT_RSP,
+        .origin = cmd->origin,
+        .cmd = app_cmd_name(cmd->type),
+        .ok = true,
+        .net = &status,
+    };
+    emit(core, &evt);
+}
+
+/* What a link that is not in hand may not do: anything that needs someone at the board to
+ * undo it, and anything that changes how the device is reached. */
+static bool needs_hands(app_cmd_type_t type)
+{
+    return type == APP_CMD_BOOTLOADER || type == APP_CMD_DEBUG || type == APP_CMD_NET;
+}
+
 void app_core_command(app_core_t *core, const app_cmd_t *cmd)
 {
+    if (cmd->remote && needs_hands(cmd->type)) {
+        respond(core, cmd, APP_ERR_NOT_ALLOWED);
+        return;
+    }
     switch (cmd->type) {
     case APP_CMD_INFO:
         cmd_info(core, cmd);
@@ -259,6 +309,27 @@ void app_core_command(app_core_t *core, const app_cmd_t *cmd)
         }
         respond(core, cmd, APP_ERR_NONE);       /* first: the action may not return */
         core->env.debug(core->env.ctx, cmd->debug);
+        break;
+    case APP_CMD_NET:
+        if (core->env.net == NULL) {
+            respond(core, cmd, APP_ERR_UNKNOWN_CMD);
+            break;
+        }
+        cmd_net(core, cmd);
+        break;
+    case APP_CMD_OTA:
+        if (core->env.ota == NULL) {
+            respond(core, cmd, APP_ERR_UNKNOWN_CMD);
+            break;
+        }
+        if (core->job_active) {
+            respond(core, cmd, APP_ERR_BUSY);   /* a tag may be half written; not now */
+            break;
+        }
+        {
+            const char *detail = NULL;
+            respond_detail(core, cmd, core->env.ota(core->env.ctx, cmd, &detail), detail);
+        }
         break;
     }
 }
@@ -329,7 +400,7 @@ static bool lookup(app_core_t *core, const app_tag_t *tag, nfc_xcvr_t *x)
         }
     }
 
-    emit(core, &evt);
+    broadcast(core, &evt);
     feedback(core, evt.text ? APP_FB_TAG_OK : APP_FB_TAG_UNKNOWN);
     if (evt.text && app_core_hid_enabled(core) && core->env.hid_type && printable(evt.text)) {
         core->env.hid_type(core->env.ctx, evt.text);
@@ -351,7 +422,7 @@ static void announce_writing(void *ctx)
         .id = w->core->job.id,
     };
     set_uid(&evt, w->tag);
-    emit(w->core, &evt);
+    broadcast(w->core, &evt);
     feedback(w->core, APP_FB_JOB_WRITING);
 }
 
@@ -412,7 +483,7 @@ static void run_job(app_core_t *core, const app_tag_t *tag, nfc_xcvr_t *x)
     evt.has_protected = true;
     evt.is_protected = st.is_protected;
     core->job_active = false;
-    emit(core, &evt);
+    broadcast(core, &evt);
     feedback(core, APP_FB_JOB_DONE);
     show_resting_state(core);
 }
@@ -439,7 +510,7 @@ void app_core_tag_conflict(app_core_t *core)
         return;
     }
     app_evt_t evt = { .type = APP_EVT_TAG, .error = APP_ERR_MULTIPLE_TAGS };
-    emit(core, &evt);
+    broadcast(core, &evt);
     feedback(core, APP_FB_TAG_UNKNOWN);
 }
 
@@ -448,7 +519,7 @@ void app_core_tag_removed(app_core_t *core, const app_tag_t *tag)
     core->tag_here = false;
     app_evt_t evt = { .type = APP_EVT_TAG_REMOVED };
     set_uid(&evt, tag);
-    emit(core, &evt);
+    broadcast(core, &evt);
 }
 
 void app_core_nfc_state(app_core_t *core, bool ok)
@@ -467,14 +538,20 @@ void app_core_nfc_state(app_core_t *core, bool ok)
     show_resting_state(core);
 }
 
-void app_core_link(app_core_t *core, bool up)
+void app_core_link(app_core_t *core, uint8_t origin, bool up)
 {
     if (!up) {
-        core->hid_override_set = false;
+        if (core->hid_override_set && core->hid_override_origin == origin) {
+            core->hid_override_set = false;
+        }
+        if (core->job_active && core->job.origin == origin) {
+            /* Nobody is left to see the outcome; the next tag must not be written unobserved. */
+            job_failed(core, APP_ERR_CANCELLED, NULL);
+        }
         return;
     }
     app_sysinfo_t sys = { 0 };
     core->env.sysinfo(core->env.ctx, &sys);
-    app_evt_t evt = { .type = APP_EVT_HELLO, .sys = &sys };
+    app_evt_t evt = { .type = APP_EVT_HELLO, .origin = origin, .sys = &sys };
     emit(core, &evt);
 }

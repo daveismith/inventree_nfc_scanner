@@ -20,7 +20,11 @@ static sim_ntag_t s_sim;
 static app_cmd_t s_cmd;
 
 static char s_lines[MAX_LINES][400];
+static uint8_t s_origins[MAX_LINES];
 static int s_nlines;
+static app_cmd_t s_net_cmd;         /* the last `net` command the environment was handed */
+static int s_net_calls;
+static int s_ota_calls;
 static uint32_t s_now;
 static char s_typed[4][NDEF_TEXT_MAX + 1];
 static int s_ntyped;
@@ -47,7 +51,40 @@ static void env_emit(void *ctx, const app_evt_t *evt)
     const size_t n = proto_format(evt, s_lines[s_nlines], sizeof(s_lines[0]));
     TEST_ASSERT_TRUE(n > 0);
     s_lines[s_nlines][n - 1] = '\0';
+    s_origins[s_nlines] = evt->origin;
     s_nlines++;
+}
+
+static app_err_t env_net(void *ctx, const app_cmd_t *cmd, app_net_status_t *status, const char **detail)
+{
+    (void)ctx;
+    s_net_calls++;
+    s_net_cmd = *cmd;
+    if (cmd->net_action == APP_NET_FORGET) {
+        *detail = "no such network";
+        return APP_ERR_BAD_ARG;
+    }
+    status->enabled = true;
+    status->wifi = "connected";
+    status->ssid = "workshop";
+    status->ip = "192.168.1.57";
+    status->url = "https://inventree.example/plugin/nfcscanner";
+    status->has_token = true;
+    status->reader = "nfc-34b7da52a084";
+    status->link = "ok";
+    status->last_status = 200;
+    status->poll_ms = 1000;
+    status->wait_s = 25;
+    return APP_ERR_NONE;
+}
+
+static app_err_t env_ota(void *ctx, const app_cmd_t *cmd, const char **detail)
+{
+    (void)ctx;
+    (void)cmd;
+    s_ota_calls++;
+    *detail = NULL;
+    return APP_ERR_NONE;
 }
 
 static uint32_t env_now(void *ctx)
@@ -132,11 +169,19 @@ static void start(void)
     forget();
 }
 
-static void cmd(const char *line)
+/* A command from link `origin`, which is `remote` when nobody is at the board. */
+static void cmd_from(uint8_t origin, bool remote, const char *line)
 {
     proto_err_t err;
     TEST_ASSERT_TRUE_MESSAGE(proto_parse(line, strlen(line), &s_cmd, &err), line);
+    s_cmd.origin = origin;
+    s_cmd.remote = remote;
     app_core_command(&s_core, &s_cmd);
+}
+
+static void cmd(const char *line)
+{
+    cmd_from(0, false, line);
 }
 
 static const char *ndef_hex(const char *text)
@@ -150,11 +195,16 @@ static const char *ndef_hex(const char *text)
     return hex;
 }
 
-static void program(const char *extra)
+static void program_from(uint8_t origin, bool remote, const char *extra)
 {
     static char line[700];
     snprintf(line, sizeof(line), PROGRAM, ndef_hex("INV-SL42"), extra);
-    cmd(line);
+    cmd_from(origin, remote, line);
+}
+
+static void program(const char *extra)
+{
+    program_from(0, false, extra);
 }
 
 static void tap(void)
@@ -181,7 +231,7 @@ static void test_info(void)
     ASSERT_LINES(1);
     ASSERT_LINE(0, "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"idf\":\"v6.1\","
                    "\"pn532\":{\"ic\":50,\"ver\":\"1.6\"},\"state\":\"idle\",\"job\":null,\"tag\":null,\"hid\":true,"
-                   "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":null,\"uptime_ms\":1000}");
+                   "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":null,\"uptime_ms\":1000,\"net\":null}");
 
     forget();
     program("");
@@ -513,7 +563,7 @@ static void test_hid_setting(void)
     TEST_ASSERT_NOT_NULL(strstr(s_lines[1], "\"text\":\"INV-SL42\""));     /* still reported */
 
     /* The host goes away without turning it back on: the default returns. */
-    app_core_link(&s_core, false);
+    app_core_link(&s_core, 0, false);
     tap();
     TEST_ASSERT_EQUAL(1, s_ntyped);
 
@@ -521,7 +571,7 @@ static void test_hid_setting(void)
     forget();
     cmd("{\"cmd\":\"hid\",\"enabled\":false,\"persist\":true}");
     TEST_ASSERT_EQUAL(0, s_saved_hid);
-    app_core_link(&s_core, false);
+    app_core_link(&s_core, 0, false);
     tap();
     TEST_ASSERT_EQUAL(0, s_ntyped);
 
@@ -561,6 +611,141 @@ static void test_wipe(void)
     ASSERT_LINE(0, "{\"evt\":\"tag\",\"uid\":\"04A1B2C3D4E5F6\",\"type\":\"ntag215\",\"protected\":false}");
 }
 
+#define ASSERT_ORIGIN(i, want) TEST_ASSERT_EQUAL_HEX8_MESSAGE((want), s_origins[(i)], "the link the line went to")
+
+/* Two hosts: an answer goes back to the one that asked, an event to both. */
+static void test_links_answers_go_back_to_the_asker(void)
+{
+    start();
+    cmd_from(1, true, "{\"cmd\":\"info\"}");
+    ASSERT_LINES(1);
+    ASSERT_ORIGIN(0, 1);
+    TEST_ASSERT_NOT_NULL(strstr(s_lines[0], "\"rsp\":\"info\",\"ok\":true"));
+
+    forget();
+    app_core_link(&s_core, 1, true);
+    ASSERT_ORIGIN(0, 1);
+    ASSERT_LINE(0, "{\"evt\":\"hello\",\"proto\":1,\"fw\":\"0.1.0\"}");
+
+    /* A job from link 1: its rsp to 1, its events to everyone. */
+    forget();
+    program_from(1, true, "");
+    ASSERT_LINES(2);
+    ASSERT_ORIGIN(0, 1);
+    ASSERT_ORIGIN(1, APP_ORIGIN_ALL);
+    forget();
+    tap();
+    ASSERT_LINES(2);
+    ASSERT_ORIGIN(0, APP_ORIGIN_ALL);           /* writing */
+    ASSERT_ORIGIN(1, APP_ORIGIN_ALL);           /* done */
+    forget();
+    app_core_tag_removed(&s_core, &TAG);
+    ASSERT_ORIGIN(0, APP_ORIGIN_ALL);
+
+    /* A parse failure is answered the same way (the caller sets the origin). */
+    proto_err_t err;
+    app_evt_t evt;
+    TEST_ASSERT_FALSE(proto_parse("{\"cmd\":\"nope\"}", 14, &s_cmd, &err));
+    proto_err_event(&err, &evt);
+    evt.origin = 1;
+    forget();
+    env_emit(NULL, &evt);
+    ASSERT_ORIGIN(0, 1);
+}
+
+/* A link that closes takes its waiting job with it; another link's job is left alone. */
+static void test_links_a_closing_link_cancels_its_own_job(void)
+{
+    start();
+    program_from(0, false, "");
+    forget();
+    app_core_link(&s_core, 1, false);           /* some other link */
+    ASSERT_LINES(0);
+    TEST_ASSERT_TRUE(app_core_wants_tag(&s_core));
+    app_core_link(&s_core, 0, false);           /* the owner */
+    ASSERT_LINES(1);
+    ASSERT_LINE(0, "{\"evt\":\"failed\",\"id\":7,\"error\":\"cancelled\"}");
+    TEST_ASSERT_FALSE(app_core_wants_tag(&s_core));
+
+    /* A session `hid` setting belongs to the link that made it. */
+    forget();
+    cmd_from(1, true, "{\"cmd\":\"hid\",\"enabled\":false}");
+    app_core_link(&s_core, 0, false);
+    TEST_ASSERT_FALSE(app_core_hid_enabled(&s_core));
+    app_core_link(&s_core, 1, false);
+    TEST_ASSERT_TRUE(app_core_hid_enabled(&s_core));
+}
+
+/* What a remote link may not do, and what it may. */
+static void test_links_remote_refusals(void)
+{
+    start();
+    cmd_from(1, true, "{\"cmd\":\"bootloader\"}");
+    ASSERT_LINES(1);
+    ASSERT_LINE(0, "{\"rsp\":\"bootloader\",\"ok\":false,\"error\":\"not_allowed\"}");
+    TEST_ASSERT_EQUAL(0, s_bootloader_calls);
+    forget();
+    cmd_from(1, true, "{\"cmd\":\"net\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"net\",\"ok\":false,\"error\":\"not_allowed\"}");
+    forget();
+    cmd_from(1, true, "{\"cmd\":\"debug\",\"action\":\"crash\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"debug\",\"ok\":false,\"error\":\"not_allowed\"}");
+
+    /* Wipe, cancel, hid and log are fine from anywhere. */
+    forget();
+    cmd_from(1, true, "{\"cmd\":\"wipe\",\"id\":3}");
+    ASSERT_LINE(0, "{\"rsp\":\"wipe\",\"ok\":true,\"id\":3}");
+    forget();
+    cmd_from(1, true, "{\"cmd\":\"cancel\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"cancel\",\"ok\":true}");
+    forget();
+    cmd_from(1, true, "{\"cmd\":\"log\",\"level\":\"off\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"log\",\"ok\":true}");
+}
+
+/* `net` and `ota` exist only where the environment provides them. */
+static void test_net_and_ota_commands(void)
+{
+    start();
+    cmd("{\"cmd\":\"net\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"net\",\"ok\":false,\"error\":\"unknown_cmd\"}");
+    forget();
+    cmd("{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"ota\",\"ok\":false,\"error\":\"unknown_cmd\"}");
+
+    s_core.env.net = env_net;
+    s_core.env.ota = env_ota;
+    s_net_calls = 0;
+    s_ota_calls = 0;
+
+    forget();
+    cmd("{\"cmd\":\"net\",\"action\":\"join\",\"ssid\":\"workshop\",\"psk\":\"hunter22\"}");
+    TEST_ASSERT_EQUAL(1, s_net_calls);
+    TEST_ASSERT_EQUAL(APP_NET_JOIN, s_net_cmd.net_action);
+    TEST_ASSERT_EQUAL_STRING("workshop", s_net_cmd.ssid);
+    TEST_ASSERT_EQUAL_STRING("hunter22", s_net_cmd.psk);
+    ASSERT_LINE(0, "{\"rsp\":\"net\",\"ok\":true,\"enabled\":true,\"wifi\":\"connected\",\"ssid\":\"workshop\","
+                   "\"ip\":\"192.168.1.57\",\"url\":\"https://inventree.example/plugin/nfcscanner\",\"token\":true,"
+                   "\"reader\":\"nfc-34b7da52a084\",\"link\":\"ok\",\"last_status\":200,\"poll_ms\":1000,"
+                   "\"wait_s\":25,\"queued\":0,\"dropped\":0}");
+
+    forget();
+    cmd("{\"cmd\":\"net\",\"action\":\"forget\",\"ssid\":\"other\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"net\",\"ok\":false,\"error\":\"bad_arg\",\"detail\":\"no such network\"}");
+
+    /* An update is accepted when the reader is idle, and refused mid-job. */
+    forget();
+    cmd("{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"ota\",\"ok\":true}");
+    TEST_ASSERT_EQUAL(1, s_ota_calls);
+    forget();
+    program("");
+    forget();
+    cmd_from(1, true, "{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"ota\",\"ok\":false,\"error\":\"busy\"}");
+    TEST_ASSERT_EQUAL(1, s_ota_calls);
+}
+
 static void test_bootloader_log_and_hello(void)
 {
     start();
@@ -569,7 +754,7 @@ static void test_bootloader_log_and_hello(void)
     TEST_ASSERT_EQUAL(APP_LOG_WARN, s_log_level);
 
     forget();
-    app_core_link(&s_core, true);
+    app_core_link(&s_core, 0, true);
     ASSERT_LINE(0, "{\"evt\":\"hello\",\"proto\":1,\"fw\":\"0.1.0\"}");
 
     /* A waiting job is ended before the device goes away. */
@@ -643,6 +828,10 @@ void run_app_core_tests(void)
     RUN_TEST(test_hid_setting);
     RUN_TEST(test_wipe);
     RUN_TEST(test_bootloader_log_and_hello);
+    RUN_TEST(test_links_answers_go_back_to_the_asker);
+    RUN_TEST(test_links_a_closing_link_cancels_its_own_job);
+    RUN_TEST(test_links_remote_refusals);
+    RUN_TEST(test_net_and_ota_commands);
     RUN_TEST(test_debug_exists_only_where_it_is_wired);
     RUN_TEST(test_feedback_follows_the_state);
 }

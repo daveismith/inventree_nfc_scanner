@@ -47,3 +47,20 @@ CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 CONFIG_APP_BUZZER_GPIO=7
 CONFIG_APP_BUZZER_GPIO_B=8
 CONFIG_APP_BUZZER_FREQ_HZ=5800
+
+# Two application slots with rollback: an update boots on trial and the previous firmware
+# returns at the next reset unless the new one confirms itself (main/ota.c).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# The settings partition is encrypted, so that a copy of the flash does not give up the
+# InvenTree token. The keys are derived in the HMAC peripheral from a key in eFuse block
+# KEY0, which the firmware generates and burns itself on the first boot that finds the block
+# empty. That burn is permanent; see "Credentials and trust" in docs/network-transport-plan.md.
+CONFIG_NVS_ENCRYPTION=y
+CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC=y
+CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=0
+
+# The network link is in this build, with http:// allowed so that it can be tried against the
+# plugin's local Docker instance. A desk unit can leave both off.
+CONFIG_APP_NET_ENABLE=y
+CONFIG_APP_NET_ALLOW_HTTP=y

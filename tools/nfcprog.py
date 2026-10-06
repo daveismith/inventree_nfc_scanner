@@ -183,6 +183,28 @@ def main():
 
     sub.add_parser('bootloader', help='restart into ROM download mode')
 
+    p = sub.add_parser('net', help='the network link: Wi-Fi and the InvenTree plugin (network builds only)')
+    net = p.add_subparsers(dest='net_action')
+    net.add_parser('status', help='what the link is doing (also the default)')
+    q = net.add_parser('join', help='remember a Wi-Fi network and join it')
+    q.add_argument('ssid')
+    q.add_argument('--psk', default='', help='passphrase; none for an open network')
+    q = net.add_parser('forget', help='forget a Wi-Fi network')
+    q.add_argument('ssid')
+    q = net.add_parser('server', help="the plugin's URL and the API token")
+    q.add_argument('url', help='e.g. https://inventree.example/plugin/nfcscanner')
+    q.add_argument('--token', help="an InvenTree API token of the scanner machine's user")
+    q = net.add_parser('poll', help='pacing')
+    q.add_argument('--poll-ms', type=int, help='idle interval, 100 to 60000')
+    q.add_argument('--wait-s', type=int, help='long-poll hold, 0 to 300 (0: plain polling)')
+    q = net.add_parser('enable', help='on the air')
+    q = net.add_parser('disable', help='off the air')
+
+    p = sub.add_parser('ota', help='fetch and install a firmware image, then restart (network builds only)')
+    p.add_argument('url', help='where the .bin is served')
+    p.add_argument('--sha256', help='its SHA-256, checked before it is used')
+    p.add_argument('--file', help='compute --sha256 from this local copy of the image')
+
     p = sub.add_parser('ndef', help='print the NDEF message for a location, in hex')
     add_location(p)
 
@@ -234,6 +256,46 @@ def main():
             show(dev.request(cmd, on_event=show))
         elif args.command == 'bootloader':
             show(dev.request({'cmd': 'bootloader'}, on_event=show))
+        elif args.command == 'net':
+            cmd = {'cmd': 'net'}
+            a = args.net_action or 'status'
+            if a == 'join':
+                cmd.update(action='join', ssid=args.ssid, psk=args.psk)
+            elif a == 'forget':
+                cmd.update(action='forget', ssid=args.ssid)
+            elif a == 'server':
+                cmd.update(action='server', url=args.url)
+                if args.token:
+                    cmd['token'] = args.token
+            elif a == 'poll':
+                cmd['action'] = 'poll'
+                if args.poll_ms is not None:
+                    cmd['poll_ms'] = args.poll_ms
+                if args.wait_s is not None:
+                    cmd['wait_s'] = args.wait_s
+            elif a in ('enable', 'disable'):
+                cmd['enabled'] = a == 'enable'
+            rsp = dev.request(cmd, on_event=show)
+            show(rsp)
+            return 0 if rsp.get('ok') else 1
+        elif args.command == 'ota':
+            cmd = {'cmd': 'ota', 'url': args.url}
+            if args.file:
+                import hashlib
+                with open(args.file, 'rb') as f:
+                    cmd['sha256'] = hashlib.sha256(f.read()).hexdigest()
+            elif args.sha256:
+                cmd['sha256'] = args.sha256
+            rsp = dev.request(cmd, on_event=show)
+            show(rsp)
+            if not rsp.get('ok'):
+                return 1
+            # Then the update's progress, until it restarts or gives up.
+            for msg in dev.lines(300):
+                show(msg)
+                if msg.get('evt') == 'ota' and msg.get('state') in ('restarting', 'failed'):
+                    return 0 if msg['state'] == 'restarting' else 1
+            return 1
         elif args.command == 'raw':
             dev.send(json.loads(args.json))
             for msg in dev.lines(args.seconds):

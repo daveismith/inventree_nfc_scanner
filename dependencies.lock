@@ -64,6 +64,6 @@ direct_dependencies:
 - espressif/esp_tinyusb
 - espressif/led_strip
 - idf
-manifest_hash: fbd6e58ca30bc2ebe9a3f499bc84f3700f984b35d1730a64d5737a5b8e9f84d1
+manifest_hash: 8e97029e15a172a76673162a1a8f23380bcc9cf31d48c7665293ee804288ccad
 target: esp32s3
 version: 3.0.0

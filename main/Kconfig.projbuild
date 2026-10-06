@@ -91,6 +91,45 @@ menu "InvenTree NFC scanner"
                 has a HID interface (CONFIG_TINYUSB_HID_COUNT=1).
     endmenu
 
+    menu "Network"
+        config APP_NET_ENABLE
+            bool "Build the Wi-Fi station and the plugin link"
+            default n
+            help
+                The reader can also be driven by the InvenTree plugin over the network: it
+                joins Wi-Fi, polls the plugin for jobs and reports back, and can be updated
+                over the network. Off, none of that code is in the image. On, it stays off
+                the air until a network, the plugin's URL and a token have been set with the
+                `net` command over USB.
+
+        config APP_NET_POLL_MS
+            int "Idle interval between calls to the plugin, in ms"
+            depends on APP_NET_ENABLE
+            default 1000
+            range 100 60000
+            help
+                The plain-polling fallback: never call more often than this when nothing is
+                happening. The `net` command can change it; this is the starting value.
+
+        config APP_NET_WAIT_S
+            int "How long the plugin may hold a call, in seconds"
+            depends on APP_NET_ENABLE
+            default 25
+            range 0 300
+            help
+                Long polling: a call with nothing to report asks the plugin to hold it until a
+                job is queued, up to this long. 0 turns that off. Keep it under what the
+                server's proxy allows (usually 30 s).
+
+        config APP_NET_ALLOW_HTTP
+            bool "Accept a plugin or update URL that is not https"
+            depends on APP_NET_ENABLE
+            default n
+            help
+                For a test server on the LAN. Off, `net server` and `ota` refuse http:// URLs,
+                since the token and the tag passwords would travel in the clear.
+    endmenu
+
     menu "Development recovery"
         config APP_DEV_RECOVERY
             bool "Enter ROM download mode by itself when the firmware is unreachable"

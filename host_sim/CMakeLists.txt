@@ -11,5 +11,6 @@ list(APPEND EXTRA_COMPONENT_DIRS
      "../components/ntag21x"
      "../components/app_core"
      "../components/proto"
+     "../components/net_sync"
      "../host_test/components/sim_ntag")
 project(host_sim)
