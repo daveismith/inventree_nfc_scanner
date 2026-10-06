@@ -106,6 +106,8 @@ void app_main(void)
         .led_gpio = CONFIG_APP_LED_GPIO,
         .led_grb = LED_ORDER_GRB,
         .buzzer_gpio = CONFIG_APP_BUZZER_GPIO,
+        .buzzer_gpio_b = CONFIG_APP_BUZZER_GPIO_B,
+        .buzzer_hz = CONFIG_APP_BUZZER_FREQ_HZ,
     };
     if (feedback_init(&fb) != ESP_OK) {
         ESP_LOGE(TAG, "no LED or buzzer");

@@ -63,6 +63,22 @@ menu "InvenTree NFC scanner"
             help
                 A passive piezo, driven with a square wave. With -1 the firmware is silent
                 and otherwise the same.
+
+        config APP_BUZZER_GPIO_B
+            int "Second piezo GPIO (-1: that leg is on GND)"
+            default -1
+            help
+                For a piezo wired between two GPIOs instead of a GPIO and ground. The two are
+                driven in antiphase, which doubles the swing across it and makes it louder.
+
+        config APP_BUZZER_FREQ_HZ
+            int "Piezo resonant frequency in Hz"
+            default 4000
+            range 500 20000
+            help
+                From the part's data sheet. A piezo is only loud near its resonance, so every
+                sound is pitched within about a tenth of this either side, and sweeps across
+                it. Set it wrong and the buzzer works but is quiet.
     endmenu
 
     menu "Keyboard output"

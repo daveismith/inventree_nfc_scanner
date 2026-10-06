@@ -41,3 +41,9 @@ CONFIG_FREERTOS_HZ=1000
 
 # Compile debug-level logs in; they stay off until {"cmd":"log","level":"debug"} asks.
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# A bare piezo element between GPIO7 and GPIO8, driven in antiphase (the board has no spare
+# GND pad). Its resonance is 5.8 kHz +/- 0.7; away from that it is barely audible.
+CONFIG_APP_BUZZER_GPIO=7
+CONFIG_APP_BUZZER_GPIO_B=8
+CONFIG_APP_BUZZER_FREQ_HZ=5800

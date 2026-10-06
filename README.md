@@ -20,7 +20,7 @@ password, never with its permanent lock bits.
 | Waveshare ESP32-S3-Zero | 4 MB flash; native USB only, no UART bridge |
 | PN532 | I2C at 0x24: SDA GPIO1, SCL GPIO2, 400 kHz. IRQ and RSTPD_N optional |
 | RGB LED | onboard WS2812, GPIO21 |
-| Piezo buzzer | optional, any GPIO |
+| Piezo buzzer | optional: a passive piezo between a GPIO and GND, or between two GPIOs (louder) |
 | Logs | UART0 TX on GPIO43, 115200 baud |
 
 Pins are set under *InvenTree NFC scanner* in `idf.py menuconfig`. Wiring RSTPD_N is worth

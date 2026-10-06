@@ -16,15 +16,19 @@
 
 #define BUZZER_TIMER    LEDC_TIMER_0
 #define BUZZER_CHANNEL  LEDC_CHANNEL_0
+#define BUZZER_CHANNEL_B LEDC_CHANNEL_1
 #define BUZZER_DUTY_RES LEDC_TIMER_10_BIT
 #define BUZZER_DUTY_ON  512         /* half of 2^10: a square wave */
+#define BUZZER_HALF_PERIOD 512      /* where in the period the second leg goes high */
 
 typedef struct {
     uint8_t r, g, b;
 } rgb_t;
 
+/* One step of a sound. The pitch is a percentage of the piezo's resonant frequency, because a
+ * bare piezo is only loud near it: a tone an octave away is barely audible. */
 typedef struct {
-    uint16_t freq_hz;               /* 0 is silence */
+    uint8_t percent;                /* of the resonant frequency; 0 is silence */
     uint16_t ms;
 } tone_t;
 
@@ -33,12 +37,20 @@ static const char *TAG = "feedback";
 static QueueHandle_t s_queue;
 static led_strip_handle_t s_led;
 static bool s_buzzer;
+static bool s_buzzer_two_pin;
+static uint32_t s_buzzer_hz;
 
-/* Sounds, each ending in a zero-length step. */
-static const tone_t s_chirp[]     = { { 2700, 60 }, { 0, 0 } };
-static const tone_t s_blip[]      = { { 900, 60 }, { 0, 0 } };
-static const tone_t s_done[]      = { { 2000, 80 }, { 0, 40 }, { 2700, 120 }, { 0, 0 } };
-static const tone_t s_failed[]    = { { 400, 300 }, { 0, 0 } };
+/*
+ * Sounds, each ending in a zero-length step. They stay within about a tenth of the resonant
+ * frequency either side, and sweep across it rather than sit on it: a part's resonance is
+ * only known to within that much, and a sweep is sure to pass through the loud spot. With so
+ * narrow a band they are told apart by rhythm and direction, not by pitch.
+ */
+static const tone_t s_chirp[]  = { { 94, 20 }, { 100, 20 }, { 106, 40 }, { 0, 0 } };       /* one quick rise */
+static const tone_t s_blip[]   = { { 100, 40 }, { 0, 60 }, { 100, 40 }, { 0, 0 } };        /* two flat pips */
+static const tone_t s_done[]   = { { 92, 60 }, { 100, 60 }, { 0, 60 },
+                                   { 100, 60 }, { 108, 140 }, { 0, 0 } };                  /* two rises, the second higher */
+static const tone_t s_failed[] = { { 108, 120 }, { 100, 120 }, { 92, 260 }, { 0, 0 } };    /* one long fall */
 
 static bool is_resting(app_feedback_t fb)
 {
@@ -116,20 +128,25 @@ static void set_led(rgb_t c)
     led_strip_refresh(s_led);
 }
 
-static void set_tone(uint16_t freq_hz)
+static void set_tone(uint32_t freq_hz)
 {
-    static uint16_t playing;
+    static uint32_t playing;
     if (!s_buzzer || freq_hz == playing) {
         return;
     }
     playing = freq_hz;
+    const uint32_t duty = freq_hz ? BUZZER_DUTY_ON : 0;
     if (freq_hz) {
         ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZZER_TIMER, freq_hz);
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL, BUZZER_DUTY_ON);
-    } else {
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL, 0);
     }
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL);
+    if (s_buzzer_two_pin) {
+        /* The same square wave, half a period later: high exactly when the first leg is low.
+         * Silent, both legs sit low, so nothing is held across the piezo. */
+        ledc_set_duty_with_hpoint(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL_B, duty, BUZZER_HALF_PERIOD);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL_B);
+    }
 }
 
 static void feedback_task(void *arg)
@@ -168,7 +185,7 @@ static void feedback_task(void *arg)
         set_led(colour_of(showing, t_ms));
 
         if (sound) {
-            set_tone(sound->freq_hz);
+            set_tone(s_buzzer_hz * sound->percent / 100);
             if (sound_left_ms > STEP_MS) {
                 sound_left_ms -= STEP_MS;
             } else {
@@ -201,13 +218,14 @@ static esp_err_t led_init(const feedback_config_t *config)
     return led_strip_clear(s_led);
 }
 
-static esp_err_t buzzer_init(int gpio)
+static esp_err_t buzzer_init(int gpio, int gpio_b, uint32_t resonant_hz)
 {
+    s_buzzer_hz = resonant_hz;
     const ledc_timer_config_t timer = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .duty_resolution = BUZZER_DUTY_RES,
         .timer_num = BUZZER_TIMER,
-        .freq_hz = 2700,
+        .freq_hz = resonant_hz,
         .clk_cfg = LEDC_AUTO_CLK,
     };
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), TAG, "buzzer timer");
@@ -219,6 +237,19 @@ static esp_err_t buzzer_init(int gpio)
         .duty = 0,
     };
     ESP_RETURN_ON_ERROR(ledc_channel_config(&channel), TAG, "buzzer channel");
+
+    if (gpio_b >= 0) {
+        const ledc_channel_config_t channel_b = {
+            .gpio_num = gpio_b,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = BUZZER_CHANNEL_B,
+            .timer_sel = BUZZER_TIMER,
+            .duty = 0,
+            .hpoint = BUZZER_HALF_PERIOD,
+        };
+        ESP_RETURN_ON_ERROR(ledc_channel_config(&channel_b), TAG, "buzzer second channel");
+        s_buzzer_two_pin = true;
+    }
     return ESP_OK;
 }
 
@@ -229,7 +260,7 @@ esp_err_t feedback_init(const feedback_config_t *config)
         s_led = NULL;
     }
     if (config->buzzer_gpio >= 0) {
-        s_buzzer = buzzer_init(config->buzzer_gpio) == ESP_OK;
+        s_buzzer = buzzer_init(config->buzzer_gpio, config->buzzer_gpio_b, config->buzzer_hz) == ESP_OK;
     }
 
     s_queue = xQueueCreate(8, sizeof(app_feedback_t));
