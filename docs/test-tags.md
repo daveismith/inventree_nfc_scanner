@@ -5,8 +5,9 @@ make it do. The host tests (`host_test/`, `tools/test_sim.py`) cover the same be
 against a simulated tag; this is the part only real tags and a real PN532 can confirm.
 
 Run on the board on 2026-10-04: every tag in the first table read as expected, all 26 checks
-of the guided script passed, and a phone opened the location page from a tag the scanner
-wrote. Not yet run: the keyboard check, and the two optional tags at the end. When a tag
+of the guided script passed, a phone opened the location page from a tag the scanner wrote,
+and the keyboard check typed a tag's text record correctly. Not yet run: the two optional
+tags at the end. When a tag
 behaves differently from the "Expect" column, that is a finding: note what the scanner
 sent, and what the phone shows under NFC Tools → Read → memory.
 

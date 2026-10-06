@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{ "name": "firmware", "path": "." },
+		{ "name": "plugin", "path": "../inventree-nfc-scanner-plugin" }
+	],
+	"settings": {
+		"files.exclude": {
+			"**/node_modules": true,
+			"**/inventree-data": true
+		}
+	}
+}
