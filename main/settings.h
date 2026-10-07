@@ -14,8 +14,13 @@ typedef struct {
     char psk[APP_NET_PSK_MAX + 1];
 } settings_network_t;
 
-/* Everything the network link is configured with. The token is read only by the link. */
+#define SETTINGS_NET_VERSION    1
+
+/* Everything the network link is configured with. The token is read only by the link. Stored
+ * as one blob; `version` and `size` say whether a stored one is this layout. */
 typedef struct {
+    uint16_t version;
+    uint16_t size;
     bool enabled;
     char url[APP_NET_URL_MAX + 1];      /* the plugin's URL, "" when unset */
     char token[APP_NET_TOKEN_MAX + 1];  /* "" when unset */

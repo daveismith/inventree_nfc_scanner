@@ -20,7 +20,8 @@ void ota_init(void);
 void ota_note_reader_up(void);
 void ota_note_host_ok(void);
 
-/* For app_core's environment: start an update. Progress comes as `ota` events. */
+/* For app_core's environment: start an update. Progress comes as `ota` events. From a remote
+ * link the image must be on the plugin's own origin; the digest is always required. */
 app_err_t ota_start(const app_cmd_t *cmd, const char **detail);
 
 bool ota_in_progress(void);

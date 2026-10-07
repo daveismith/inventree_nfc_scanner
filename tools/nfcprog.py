@@ -19,7 +19,9 @@ Needs pyserial. The protocol is described in components/proto/include/proto.h.
 """
 
 import argparse
+import getpass
 import json
+import re
 import sys
 import time
 
@@ -44,9 +46,18 @@ def build_ndef(host, pk, scheme='https'):
     A URI record, so a phone opens the location's page, then a Text record holding
     InvenTree's short barcode for the location, which is what the scanner types.
     """
+    host = re.sub(r'^https?://', '', host.strip()).rstrip('/')    # a pasted URL is forgiven
     uri = bytes([URI_PREFIX[scheme]]) + f'{host}/web/stock/location/{pk}'.encode()
     text = b'\x02en' + f'INV-SL{pk}'.encode()      # UTF-8, language "en"
     return ndef_record('U', uri, True, False) + ndef_record('T', text, False, True)
+
+
+# Fields whose values are never shown: a passphrase, a token, a tag password.
+SECRET_FIELDS = ('psk', 'token', 'pwd', 'old_pwd', 'pack')
+
+
+def redacted(obj):
+    return {k: ('***' if k in SECRET_FIELDS and v else v) for k, v in obj.items()}
 
 
 def find_port():
@@ -55,6 +66,8 @@ def find_port():
     ports = [p for p in serial.tools.list_ports.comports() if p.vid == ESPRESSIF_VID and p.pid == APP_PID]
     if not ports:
         sys.exit(f'no scanner found at {ESPRESSIF_VID:04x}:{APP_PID:04x}; plug it in or pass --port')
+    if len(ports) > 1:
+        sys.exit('more than one scanner is connected; pass --port: ' + ', '.join(p.device for p in ports))
     return ports[0].device
 
 
@@ -72,7 +85,7 @@ class Device:
     def send(self, obj):
         line = json.dumps(obj, separators=(',', ':'))
         if self.verbose:
-            print(f'> {line}', file=sys.stderr)
+            print(f'> {json.dumps(redacted(obj), separators=(",", ":"))}', file=sys.stderr)
         self.port.write(line.encode() + b'\n')
         self.port.flush()
 
@@ -188,12 +201,13 @@ def main():
     net.add_parser('status', help='what the link is doing (also the default)')
     q = net.add_parser('join', help='remember a Wi-Fi network and join it')
     q.add_argument('ssid')
-    q.add_argument('--psk', default='', help='passphrase; none for an open network')
+    q.add_argument('--psk', help='passphrase (prompted for if omitted; leave empty for an open network)')
     q = net.add_parser('forget', help='forget a Wi-Fi network')
     q.add_argument('ssid')
     q = net.add_parser('server', help="the plugin's URL and the API token")
     q.add_argument('url', help='e.g. https://inventree.example/plugin/nfcscanner')
-    q.add_argument('--token', help="an InvenTree API token of the scanner machine's user")
+    q.add_argument('--token', help="an InvenTree API token of the scanner machine's user (prompted for if omitted)")
+    q.add_argument('--no-token', action='store_true', help='change the URL only, keeping the stored token')
     q = net.add_parser('poll', help='pacing')
     q.add_argument('--poll-ms', type=int, help='idle interval, 100 to 60000')
     q.add_argument('--wait-s', type=int, help='long-poll hold, 0 to 300 (0: plain polling)')
@@ -260,13 +274,18 @@ def main():
             cmd = {'cmd': 'net'}
             a = args.net_action or 'status'
             if a == 'join':
-                cmd.update(action='join', ssid=args.ssid, psk=args.psk)
+                # Prompted rather than taken on the command line, where it would sit in the shell
+                # history and in `ps` output.
+                psk = args.psk if args.psk is not None else getpass.getpass('Passphrase (empty for an open network): ')
+                cmd.update(action='join', ssid=args.ssid, psk=psk)
             elif a == 'forget':
                 cmd.update(action='forget', ssid=args.ssid)
             elif a == 'server':
                 cmd.update(action='server', url=args.url)
                 if args.token:
                     cmd['token'] = args.token
+                elif not args.no_token:
+                    cmd['token'] = getpass.getpass('API token: ')
             elif a == 'poll':
                 cmd['action'] = 'poll'
                 if args.poll_ms is not None:

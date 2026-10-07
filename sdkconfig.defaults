@@ -60,7 +60,11 @@ CONFIG_NVS_ENCRYPTION=y
 CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC=y
 CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=0
 
-# The network link is in this build, with http:// allowed so that it can be tried against the
-# plugin's local Docker instance. A desk unit can leave both off.
+# The network link is in this build. Plain http:// plugin and update URLs, and the
+# development recovery guard, are off here and on in sdkconfig.dev; see README "Build".
 CONFIG_APP_NET_ENABLE=y
-CONFIG_APP_NET_ALLOW_HTTP=y
+
+# cJSON parses by recursion and allows 1000 levels of nesting by default, which a line from a
+# host or an answer from a server could use to overflow a task's stack. Nothing in the
+# protocol nests more than three deep.
+CONFIG_CJSON_NESTING_LIMIT=8

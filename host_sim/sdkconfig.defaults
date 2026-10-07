@@ -1,1 +1,6 @@
 CONFIG_IDF_TARGET="linux"
+
+# cJSON parses by recursion and allows 1000 levels of nesting by default, which a line from a
+# host or an answer from a server could use to overflow a task's stack. Nothing in the
+# protocol nests more than three deep.
+CONFIG_CJSON_NESTING_LIMIT=8

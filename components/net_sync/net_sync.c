@@ -27,6 +27,17 @@ void net_sync_reconfigured(net_sync_t *ns)
     ns->ever_called = false;
 }
 
+void net_sync_new_server(net_sync_t *ns)
+{
+    net_sync_reconfigured(ns);
+    ns->head = 0;
+    ns->count = 0;
+    ns->cmd_ack = 0;
+    ns->sent_through = 0;
+    ns->server_poll_ms = 0;
+    ns->last_status = 0;
+}
+
 /* The message's name: "rsp", or the event's name. */
 static bool line_kind(const char *line, size_t len, const char **name, size_t *name_len)
 {
@@ -131,9 +142,11 @@ uint32_t net_sync_delay_ms(const net_sync_t *ns, uint32_t now_ms)
     if (ns->refused || ns->backoff_ms) {
         return until > 0 ? (uint32_t)until : 0;
     }
-    if (ns->count > 0) {
-        return 0;                       /* something to report: no waiting */
+    if (ns->count > 0 && ns->last_seq > ns->sent_through) {
+        return 0;                       /* something new to report: no waiting */
     }
+    /* Messages the server has already seen and not acknowledged go again at the idle pace,
+     * never in a tight loop. */
     return until > 0 ? (uint32_t)until : 0;
 }
 
@@ -174,6 +187,7 @@ size_t net_sync_request(net_sync_t *ns, uint32_t now_ms, bool hold, char *out, s
         return 0;
     }
     ns->last_started = now_ms;
+    ns->sent_through = ns->last_seq;
     ns->ever_called = true;
     return at;
 }
@@ -195,6 +209,16 @@ void net_sync_unreachable(net_sync_t *ns, uint32_t now_ms)
 {
     ns->last_status = -1;
     back_off(ns, now_ms);
+}
+
+/* A JSON number as a sequence number: whole, and within what the counters hold. */
+static bool as_seq(const cJSON *item, uint32_t *out)
+{
+    if (!cJSON_IsNumber(item) || item->valuedouble < 0 || item->valuedouble > 2147483647.0) {
+        return false;
+    }
+    *out = (uint32_t)item->valuedouble;
+    return true;
 }
 
 static void acknowledged(net_sync_t *ns, uint32_t ack)
@@ -229,9 +253,9 @@ void net_sync_response(net_sync_t *ns, uint32_t now_ms, int status, const char *
     ns->refused = false;
     ns->backoff_ms = 0;
 
-    const cJSON *ack = cJSON_GetObjectItemCaseSensitive(obj, "ack");
-    if (cJSON_IsNumber(ack) && ack->valuedouble >= 0) {
-        acknowledged(ns, (uint32_t)ack->valuedouble);
+    uint32_t ack;
+    if (as_seq(cJSON_GetObjectItemCaseSensitive(obj, "ack"), &ack)) {
+        acknowledged(ns, ack);
     }
     const cJSON *poll = cJSON_GetObjectItemCaseSensitive(obj, "poll_ms");
     ns->server_poll_ms = (cJSON_IsNumber(poll) && poll->valuedouble > 0 && poll->valuedouble < 3600000.0)
@@ -240,14 +264,19 @@ void net_sync_response(net_sync_t *ns, uint32_t now_ms, int status, const char *
     const cJSON *cmds = cJSON_GetObjectItemCaseSensitive(obj, "cmds");
     const cJSON *cmd;
     cJSON_ArrayForEach(cmd, cmds) {
-        const cJSON *seq = cJSON_GetObjectItemCaseSensitive(cmd, "seq");
-        if (!cJSON_IsObject(cmd) || !cJSON_IsNumber(seq) || seq->valuedouble <= (double)ns->cmd_ack) {
+        uint32_t seq;
+        if (!cJSON_IsObject(cmd) || !as_seq(cJSON_GetObjectItemCaseSensitive(cmd, "seq"), &seq) || seq <= ns->cmd_ack) {
             continue;                   /* malformed, or acted on already */
         }
-        ns->cmd_ack = (uint32_t)seq->valuedouble;
-        if (on_cmd && cJSON_PrintPreallocated((cJSON *)cmd, ns->cmd_buf, sizeof(ns->cmd_buf), false)) {
-            on_cmd(ctx, ns->cmd_buf, strlen(ns->cmd_buf));
+        if (!cJSON_PrintPreallocated((cJSON *)cmd, ns->cmd_buf, sizeof(ns->cmd_buf), false)) {
+            ns->dropped++;              /* longer than any line the protocol takes: it would never fit */
+            ns->cmd_ack = seq;
+            continue;
         }
+        if (on_cmd && !on_cmd(ctx, ns->cmd_buf, strlen(ns->cmd_buf))) {
+            break;                      /* not taken: not acknowledged, so it comes again */
+        }
+        ns->cmd_ack = seq;
     }
     cJSON_Delete(obj);
     schedule_idle(ns);

@@ -23,7 +23,7 @@
 #include "settings.h"
 #include "wifi_sta.h"
 
-#define SYNC_STACK      6144
+#define SYNC_STACK      8192            /* a TLS handshake with the certificate bundle, and cJSON */
 #define SYNC_PRIO       4
 #define RESP_MAX        8192
 #define BODY_MAX        8192
@@ -52,8 +52,22 @@ typedef struct {
     char resp[RESP_MAX];
 } http_ctx_t;
 
+/*
+ * Commands from the plugin are gathered here while the lock is held and handed to the app
+ * task after it is released: app_task_line() answers a line it cannot parse through
+ * link_send(), which takes the same lock, and may wait on the command queue, which the app
+ * task cannot drain while it waits for the lock to emit. One is enough for a call; a server
+ * with more queued sends the rest with the next call.
+ */
+typedef struct {
+    int count;
+    char json[2][NET_SYNC_CMD_MAX];
+} cmd_batch_t;
+
 static http_ctx_t s_poll_http;
 static http_ctx_t s_report_http;
+static cmd_batch_t s_poll_batch;
+static cmd_batch_t s_report_batch;
 
 static uint32_t now_ms(void)
 {
@@ -77,6 +91,41 @@ static void wake(TaskHandle_t task)
     }
 }
 
+bool url_allowed(const char *url)
+{
+    const bool https = strncmp(url, "https://", 8) == 0;
+#if CONFIG_APP_NET_ALLOW_HTTP
+    const bool scheme_ok = https || strncmp(url, "http://", 7) == 0;
+#else
+    const bool scheme_ok = https;
+#endif
+    if (!scheme_ok) {
+        return false;
+    }
+    /* No user info: "https://host@evil/" would send the token where the eye does not look. */
+    const char *rest = url + (https ? 8 : 7);
+    const char *slash = strchr(rest, '/');
+    const char *at = strchr(rest, '@');
+    return rest[0] != '\0' && (at == NULL || (slash != NULL && at > slash));
+}
+
+/* The scheme, host and port of a URL: `*len` bytes from its start. */
+static size_t origin_len(const char *url)
+{
+    const char *rest = strncmp(url, "https://", 8) == 0 ? url + 8 : (strncmp(url, "http://", 7) == 0 ? url + 7 : NULL);
+    if (rest == NULL) {
+        return 0;
+    }
+    const char *slash = strchr(rest, '/');
+    return slash ? (size_t)(slash - url) : strlen(url);
+}
+
+bool same_origin(const char *a, const char *b)
+{
+    const size_t n = origin_len(a);
+    return n > 0 && n == origin_len(b) && strncmp(a, b, n) == 0 && (a[n] == '\0' || a[n] == '/') && (b[n] == '\0' || b[n] == '/');
+}
+
 /* Under the lock: the URL the calls go to, from the settings. */
 static void derive_sync_url(void)
 {
@@ -92,7 +141,7 @@ static void derive_sync_url(void)
 
 static bool configured(void)
 {
-    return s_cfg.enabled && s_cfg.url[0] && s_cfg.token[0];
+    return s_cfg.enabled && s_cfg.url[0] && s_cfg.token[0] && url_allowed(s_cfg.url);
 }
 
 /* The link as a sink for app_task: what app_core emits for the plugin. App task context. */
@@ -107,11 +156,15 @@ static void link_send(void *ctx, const char *line, size_t len)
     }
 }
 
-/* A command from the plugin. Under the lock, on a link task. */
-static void on_cmd(void *ctx, const char *json, size_t len)
+static bool on_cmd(void *ctx, const char *json, size_t len)
 {
-    (void)ctx;
-    app_task_line(APP_LINK_NET, json, len);
+    cmd_batch_t *batch = ctx;
+    if (batch->count == 2) {
+        return false;
+    }
+    memcpy(batch->json[batch->count], json, len + 1);
+    batch->count++;
+    return true;
 }
 
 /* One call. Returns the HTTP status, or -1 when the server was not reached. */
@@ -133,17 +186,25 @@ static int do_call(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, size_t *
             return -1;
         }
     }
+    /* The URL and token are read under the lock, since the app task may be rewriting them;
+     * the client keeps its own copy of the header, so the stack copy is wiped at once rather
+     * than sitting there for the length of a held call, where a core dump would find it. */
     char auth[APP_NET_TOKEN_MAX + 8];
+    char url[sizeof(s_sync_url)];
+    lock();
     snprintf(auth, sizeof(auth), "Token %s", s_cfg.token);
-    esp_http_client_set_url(h->client, s_sync_url);
+    memcpy(url, s_sync_url, sizeof(url));
+    unlock();
+    esp_http_client_set_url(h->client, url);
     esp_http_client_set_method(h->client, HTTP_METHOD_POST);
     esp_http_client_set_timeout_ms(h->client, (int)timeout_ms);
     esp_http_client_set_header(h->client, "Content-Type", "application/json");
     esp_http_client_set_header(h->client, "Authorization", auth);
+    memset(auth, 0, sizeof(auth));
 
     esp_err_t err = esp_http_client_open(h->client, (int)body_len);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "cannot reach %s: %s", s_sync_url, esp_err_to_name(err));
+        ESP_LOGW(TAG, "cannot reach %s: %s", url, esp_err_to_name(err));
         esp_http_client_cleanup(h->client);
         h->client = NULL;
         return -1;
@@ -171,12 +232,13 @@ static int do_call(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, size_t *
         h->resp[at] = '\0';
         *resp_len = at;
     }
-    esp_http_client_close(h->client);
     if (!ok) {
         esp_http_client_cleanup(h->client);
         h->client = NULL;
         return -1;
     }
+    /* Not closed: with the body read to its end the connection stays open for the next call,
+     * which spares a TLS handshake a second under plain polling. */
     return status;
 }
 
@@ -199,11 +261,13 @@ static void exchange(http_ctx_t *h, bool hold)
     if (h == &s_poll_http) {
         s_holding = false;
     }
+    cmd_batch_t *batch = h == &s_poll_http ? &s_poll_batch : &s_report_batch;
+    batch->count = 0;
     lock();
     if (status < 0) {
         net_sync_unreachable(&s_ns, now_ms());
     } else {
-        net_sync_response(&s_ns, now_ms(), status, h->resp, resp_len, on_cmd, NULL);
+        net_sync_response(&s_ns, now_ms(), status, h->resp, resp_len, on_cmd, batch);
         if (status >= 200 && status < 300) {
             s_ever_ok = true;
         } else {
@@ -211,6 +275,9 @@ static void exchange(http_ctx_t *h, bool hold)
         }
     }
     unlock();
+    for (int i = 0; i < batch->count; i++) {
+        app_task_line(APP_LINK_NET, batch->json[i], strlen(batch->json[i]));
+    }
     if (status >= 200 && status < 300) {
         ota_note_host_ok();
     }
@@ -307,6 +374,9 @@ void net_link_init(void)
     unlock();
     ESP_LOGI(TAG, "reader %s, %s, plugin %s", s_reader, s_cfg.enabled ? "enabled" : "disabled",
              s_cfg.url[0] ? s_cfg.url : "(unset)");
+    if (s_cfg.url[0] && !url_allowed(s_cfg.url)) {
+        ESP_LOGW(TAG, "the stored plugin URL is not allowed by this build (http); the link stays off");
+    }
 }
 
 void net_link_status(app_net_status_t *out)
@@ -387,13 +457,15 @@ app_err_t net_link_command(const app_cmd_t *cmd, app_net_status_t *status, const
         break;
     }
     case APP_NET_SERVER:
-#if !CONFIG_APP_NET_ALLOW_HTTP
-        if (strncmp(cmd->url, "https://", 8) != 0) {
-            *detail = "url: https only (CONFIG_APP_NET_ALLOW_HTTP permits http for testing)";
+        if (!url_allowed(cmd->url)) {
+            *detail = "url: https only, with no user info (CONFIG_APP_NET_ALLOW_HTTP permits http for testing)";
             err = APP_ERR_BAD_ARG;
             break;
         }
-#endif
+        if (!same_origin(cmd->url, s_cfg.url) && !cmd->has_token) {
+            /* The token was issued for the old server; it is not sent to a new one. */
+            memset(s_cfg.token, 0, sizeof(s_cfg.token));
+        }
         snprintf(s_cfg.url, sizeof(s_cfg.url), "%s", cmd->url);
         if (cmd->has_token) {
             snprintf(s_cfg.token, sizeof(s_cfg.token), "%s", cmd->token);
@@ -411,8 +483,6 @@ app_err_t net_link_command(const app_cmd_t *cmd, app_net_status_t *status, const
         net_sync_set_pacing(&s_ns, s_cfg.poll_ms, s_cfg.wait_s);
         save = true;
         break;
-    case APP_NET_ENABLE:
-        break;
     }
     if (err == APP_ERR_NONE && cmd->has_enabled && cmd->enabled != s_cfg.enabled) {
         s_cfg.enabled = cmd->enabled;
@@ -424,7 +494,9 @@ app_err_t net_link_command(const app_cmd_t *cmd, app_net_status_t *status, const
     if (err == APP_ERR_NONE && networks_changed) {
         apply_networks();
     }
-    if (err == APP_ERR_NONE && (server_changed || networks_changed)) {
+    if (err == APP_ERR_NONE && server_changed) {
+        net_sync_new_server(&s_ns);
+    } else if (err == APP_ERR_NONE && networks_changed) {
         net_sync_reconfigured(&s_ns);
     }
     unlock();
@@ -437,12 +509,10 @@ app_err_t net_link_command(const app_cmd_t *cmd, app_net_status_t *status, const
     return APP_ERR_NONE;
 }
 
-const char *net_link_url(void)
+void net_link_server(char *url, size_t url_cap, char *token, size_t token_cap)
 {
-    return s_cfg.url;
-}
-
-const char *net_link_token(void)
-{
-    return s_cfg.token;
+    lock();
+    snprintf(url, url_cap, "%s", s_cfg.url);
+    snprintf(token, token_cap, "%s", s_cfg.token);
+    unlock();
 }

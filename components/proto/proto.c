@@ -294,7 +294,7 @@ static bool parse_net(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
     return fail(err, APP_ERR_BAD_ARG, "action: expected join, forget, server or poll");
 }
 
-/* {"cmd":"ota","url":"https://...","sha256":"<64 hex>"} */
+/* {"cmd":"ota","url":"https://...","sha256":"<64 hex>"}: both required. */
 static bool parse_ota(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
 {
     bool has_url;
@@ -304,7 +304,10 @@ static bool parse_ota(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
     if (!has_url || !looks_like_url(cmd->ota_url)) {
         return fail(err, APP_ERR_BAD_ARG, "url: required, beginning http:// or https://");
     }
-    return get_hex_exact(obj, "sha256", cmd->sha256, sizeof(cmd->sha256), &cmd->has_sha256, err);
+    if (!get_hex_exact(obj, "sha256", cmd->sha256, sizeof(cmd->sha256), &cmd->has_sha256, err)) {
+        return false;
+    }
+    return cmd->has_sha256 ? true : fail(err, APP_ERR_BAD_ARG, "sha256: required, 64 hex digits");
 }
 
 static bool parse_debug(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
@@ -345,7 +348,8 @@ bool proto_parse(const char *line, size_t len, app_cmd_t *cmd, proto_err_t *err)
         ok = fail(err, APP_ERR_BAD_JSON, "cmd: required");
     } else if (strcmp(name->valuestring, "info") == 0) {
         cmd->type = APP_CMD_INFO;
-        ok = true;
+        err->cmd = app_cmd_name(cmd->type);
+        ok = parse_id(obj, false, cmd, err);
     } else if (strcmp(name->valuestring, "program") == 0) {
         cmd->type = APP_CMD_PROGRAM;
         err->cmd = app_cmd_name(cmd->type);
@@ -361,27 +365,28 @@ bool proto_parse(const char *line, size_t len, app_cmd_t *cmd, proto_err_t *err)
     } else if (strcmp(name->valuestring, "hid") == 0) {
         cmd->type = APP_CMD_HID;
         err->cmd = app_cmd_name(cmd->type);
-        ok = get_bool(obj, "enabled", true, &cmd->enabled, err)
+        ok = parse_id(obj, false, cmd, err) && get_bool(obj, "enabled", true, &cmd->enabled, err)
              && get_bool(obj, "persist", false, &cmd->persist, err);
     } else if (strcmp(name->valuestring, "log") == 0) {
         cmd->type = APP_CMD_LOG;
         err->cmd = app_cmd_name(cmd->type);
-        ok = parse_log(obj, cmd, err);
+        ok = parse_id(obj, false, cmd, err) && parse_log(obj, cmd, err);
     } else if (strcmp(name->valuestring, "bootloader") == 0) {
         cmd->type = APP_CMD_BOOTLOADER;
-        ok = true;
+        err->cmd = app_cmd_name(cmd->type);
+        ok = parse_id(obj, false, cmd, err);
     } else if (strcmp(name->valuestring, "debug") == 0) {
         cmd->type = APP_CMD_DEBUG;
         err->cmd = app_cmd_name(cmd->type);
-        ok = parse_debug(obj, cmd, err);
+        ok = parse_id(obj, false, cmd, err) && parse_debug(obj, cmd, err);
     } else if (strcmp(name->valuestring, "net") == 0) {
         cmd->type = APP_CMD_NET;
         err->cmd = app_cmd_name(cmd->type);
-        ok = parse_net(obj, cmd, err);
+        ok = parse_id(obj, false, cmd, err) && parse_net(obj, cmd, err);
     } else if (strcmp(name->valuestring, "ota") == 0) {
         cmd->type = APP_CMD_OTA;
         err->cmd = app_cmd_name(cmd->type);
-        ok = parse_ota(obj, cmd, err);
+        ok = parse_id(obj, false, cmd, err) && parse_ota(obj, cmd, err);
     } else {
         ok = fail(err, APP_ERR_UNKNOWN_CMD, "");
     }

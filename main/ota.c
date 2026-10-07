@@ -10,6 +10,7 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "psa/crypto.h"
@@ -25,11 +26,17 @@
 
 static const char *TAG = "ota";
 
+/* A reader chip that never answers must not pin a unit on an unconfirmable image, so after
+ * this long a reached host is enough on its own. */
+#define READER_GRACE_S  60
+
 static bool s_on_trial;
 static bool s_reader_up;
 static bool s_host_ok;
 static volatile bool s_running;
 static app_cmd_t s_cmd;                 /* the update being made: url and sha256 */
+static char s_plugin_url[APP_NET_URL_MAX + 1];
+static char s_token[APP_NET_TOKEN_MAX + 1];
 
 static void confirm_if_due(void)
 {
@@ -41,6 +48,15 @@ static void confirm_if_due(void)
     }
 }
 
+static void reader_grace_over(void *arg)
+{
+    (void)arg;
+    if (!s_reader_up) {
+        ESP_LOGW(TAG, "no reader chip after %d s; a reached host confirms this firmware on its own", READER_GRACE_S);
+        ota_note_reader_up();
+    }
+}
+
 void ota_init(void)
 {
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -48,6 +64,11 @@ void ota_init(void)
     if (running && esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
         s_on_trial = true;
         ESP_LOGW(TAG, "running %s on trial: it rolls back unless the reader and a host come up", running->label);
+        esp_timer_handle_t t;
+        const esp_timer_create_args_t args = { .callback = reader_grace_over, .name = "ota_grace" };
+        if (esp_timer_create(&args, &t) == ESP_OK) {
+            esp_timer_start_once(t, (uint64_t)READER_GRACE_S * 1000000);
+        }
     }
 }
 
@@ -78,16 +99,14 @@ static void announce(const char *state, const char *detail)
     }
 }
 
-/* The token goes along only to the plugin's own server. */
+/* The token goes along only to the plugin's own origin: same scheme, host and port. */
 static esp_err_t add_auth(esp_http_client_handle_t client)
 {
-    const char *plugin = net_link_url();
-    const char *host_end = strchr(plugin + (strncmp(plugin, "https://", 8) == 0 ? 8 : 7), '/');
-    const size_t origin_len = host_end ? (size_t)(host_end - plugin) : strlen(plugin);
-    if (plugin[0] && origin_len && strncmp(s_cmd.ota_url, plugin, origin_len) == 0 && net_link_token()[0]) {
+    if (s_plugin_url[0] && s_token[0] && same_origin(s_cmd.ota_url, s_plugin_url)) {
         char auth[APP_NET_TOKEN_MAX + 8];
-        snprintf(auth, sizeof(auth), "Token %s", net_link_token());
+        snprintf(auth, sizeof(auth), "Token %s", s_token);
         esp_http_client_set_header(client, "Authorization", auth);
+        memset(auth, 0, sizeof(auth));
     }
     return ESP_OK;
 }
@@ -139,6 +158,7 @@ static void ota_task(void *arg)
     esp_https_ota_handle_t h = NULL;
     esp_err_t err = esp_https_ota_begin(&cfg, &h);
     const char *failure = NULL;
+    int written = 0;
     if (err != ESP_OK) {
         failure = esp_err_to_name(err);
     } else {
@@ -152,19 +172,21 @@ static void ota_task(void *arg)
             failure = esp_err_to_name(err);
         } else if (!esp_https_ota_is_complete_data_received(h)) {
             failure = "the image was cut short";
-        } else if (s_cmd.has_sha256 && !digest_matches(h)) {
+        } else if (!digest_matches(h)) {
             failure = "sha256 does not match";
         }
+        written = esp_https_ota_get_image_len_read(h);
         if (failure) {
             esp_https_ota_abort(h);
         } else {
-            err = esp_https_ota_finish(h);       /* checks the image and makes it the one to boot */
+            err = esp_https_ota_finish(h);       /* checks the image and makes it the one to boot; frees h */
             if (err != ESP_OK) {
                 failure = esp_err_to_name(err);
             }
         }
     }
 
+    memset(s_token, 0, sizeof(s_token));
     if (failure) {
         ESP_LOGE(TAG, "update failed: %s", failure);
         announce("failed", failure);
@@ -172,28 +194,41 @@ static void ota_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "update written (%d bytes); restarting into it", esp_https_ota_get_image_len_read(h));
+    ESP_LOGI(TAG, "update written (%d bytes); restarting into it", written);
     announce("restarting", NULL);
     vTaskDelay(pdMS_TO_TICKS(500));             /* let the lines out */
     esp_restart();
 }
 
+/*
+ * What is trusted here. The plugin's server is trusted already: it hands out the tag
+ * passwords and decides every job. So an update asked for over the network must come from
+ * that same origin, over the link that is trusted to carry the token, and name the image's
+ * digest. From USB, where someone is at the board, any allowed URL will do. There is no
+ * signing: the digest proves the image is the one the server meant, not who built it. A
+ * unit that must resist a hostile server needs secure boot, which is not in this firmware.
+ */
 app_err_t ota_start(const app_cmd_t *cmd, const char **detail)
 {
     if (s_running) {
         *detail = "an update is already in progress";
         return APP_ERR_BUSY;
     }
-#if !CONFIG_APP_NET_ALLOW_HTTP
-    if (strncmp(cmd->ota_url, "https://", 8) != 0) {
-        *detail = "url: https only (CONFIG_APP_NET_ALLOW_HTTP permits http for testing)";
+    if (!url_allowed(cmd->ota_url)) {
+        *detail = "url: https only, with no user info (CONFIG_APP_NET_ALLOW_HTTP permits http for testing)";
         return APP_ERR_BAD_ARG;
     }
-#endif
+    net_link_server(s_plugin_url, sizeof(s_plugin_url), s_token, sizeof(s_token));
+    if (cmd->remote && !same_origin(cmd->ota_url, s_plugin_url)) {
+        memset(s_token, 0, sizeof(s_token));
+        *detail = "from the network, an image must come from the plugin's own server";
+        return APP_ERR_NOT_ALLOWED;
+    }
     s_cmd = *cmd;
     s_running = true;
     if (xTaskCreate(ota_task, "ota", OTA_STACK, NULL, OTA_PRIO, NULL) != pdPASS) {
         s_running = false;
+        memset(s_token, 0, sizeof(s_token));
         *detail = "no memory for the update task";
         return APP_ERR_BUSY;
     }

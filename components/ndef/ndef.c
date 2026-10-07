@@ -84,6 +84,8 @@ static size_t read_record(const uint8_t *p, size_t len, record_t *r)
     return i;
 }
 
+static bool utf8_valid(const uint8_t *s, size_t n);
+
 static void take_uri(const record_t *r, ndef_info_t *out)
 {
     if (r->payload_len < 1) {
@@ -97,9 +99,50 @@ static void take_uri(const record_t *r, ndef_info_t *out)
         return;
     }
     memcpy(out->uri, prefix, prefix_len);
+    if (!utf8_valid(r->payload + 1, rest)) {
+        return;
+    }
     memcpy(out->uri + prefix_len, r->payload + 1, rest);
     out->uri[prefix_len + rest] = '\0';
     out->has_uri = true;
+}
+
+/* Well-formed UTF-8, with no NUL: what can go into a JSON string and a text field. */
+static bool utf8_valid(const uint8_t *s, size_t n)
+{
+    for (size_t i = 0; i < n;) {
+        const uint8_t c = s[i];
+        size_t more;
+        uint32_t cp;
+        if (c == 0) {
+            return false;
+        } else if (c < 0x80) {
+            i++;
+            continue;
+        } else if ((c & 0xE0) == 0xC0 && c >= 0xC2) {
+            more = 1;
+            cp = c & 0x1F;
+        } else if ((c & 0xF0) == 0xE0) {
+            more = 2;
+            cp = c & 0x0F;
+        } else if ((c & 0xF8) == 0xF0 && c <= 0xF4) {
+            more = 3;
+            cp = c & 0x07;
+        } else {
+            return false;
+        }
+        for (size_t k = 1; k <= more; k++) {
+            if (i + k >= n || (s[i + k] & 0xC0) != 0x80) {
+                return false;
+            }
+            cp = (cp << 6) | (s[i + k] & 0x3F);
+        }
+        if ((more == 2 && (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))) || (more == 3 && (cp < 0x10000 || cp > 0x10FFFF))) {
+            return false;
+        }
+        i += more + 1;
+    }
+    return true;
 }
 
 static void take_text(const record_t *r, ndef_info_t *out)
@@ -116,7 +159,7 @@ static void take_text(const record_t *r, ndef_info_t *out)
         return;
     }
     const size_t text_len = r->payload_len - 1 - lang_len;
-    if (text_len > NDEF_TEXT_MAX) {
+    if (text_len > NDEF_TEXT_MAX || !utf8_valid(r->payload + 1 + lang_len, text_len)) {
         return;
     }
     memcpy(out->text, r->payload + 1 + lang_len, text_len);

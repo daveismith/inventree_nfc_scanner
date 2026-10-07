@@ -78,8 +78,7 @@ typedef enum {
     APP_NET_JOIN,               /* remember a network and join it */
     APP_NET_FORGET,
     APP_NET_SERVER,             /* the plugin's URL and token */
-    APP_NET_POLL,               /* pacing */
-    APP_NET_ENABLE,             /* on or off the air */
+    APP_NET_POLL,               /* pacing; `enabled` may come with any action, or alone */
 } app_net_action_t;
 
 typedef enum {
@@ -152,7 +151,8 @@ typedef struct {
     const char *url;            /* the plugin's URL, else NULL */
     bool has_token;
     const char *reader;         /* this device's reader id */
-    const char *link;           /* "off", "ok", "unreachable", "refused", "error" */
+    const char *link;           /* "off" (not configured), "no_wifi", "idle" (nothing tried yet), "ok",
+                                   "unreachable", "refused" (401, 403 or 404), "error" (another status) */
     int last_status;            /* the last HTTP status, 0 for none yet */
     uint32_t poll_ms;
     uint32_t wait_s;

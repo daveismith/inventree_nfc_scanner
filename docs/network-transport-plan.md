@@ -14,8 +14,9 @@ location.
 
 This is an option in two senses:
 
-- **Compiled in or not.** `CONFIG_APP_NET_ENABLE`, off by default. A build without it has no
-  radio code and is the firmware as it is now.
+- **Compiled in or not.** `CONFIG_APP_NET_ENABLE`. A build without it has no radio code and
+  is the firmware as it was. `sdkconfig.defaults` turns it on, since the one board so far
+  is both the desk unit and the network unit.
 - **Switched on or not.** A build with it stays off the air until a network, a plugin URL
   and a token have been saved on the device, and can be turned off again, all over USB.
 
@@ -40,8 +41,8 @@ endpoint is also the natural place for the logic that only the server can do.
 
 ## The exchange with the plugin
 
-The plugin does not exist yet, so this is its contract as much as the firmware's. There is
-one endpoint. The reader calls it whenever it has something to report, and otherwise at an
+This is the contract the plugin implements (`inventree-nfc-scanner-plugin`, docs/api.md
+there). There is one endpoint. The reader calls it whenever it has something to report, and otherwise at an
 interval.
 
 ```
@@ -147,11 +148,11 @@ Run time, kept in NVS, set with the `net` command over USB:
 ```
 > {"cmd":"net"}
 < {"rsp":"net","ok":true,"enabled":true,"wifi":"connected","ssid":"workshop","ip":"192.168.1.57",
-   "url":"https://inventree.example/plugin/nfc-reader","reader":"nfc-34b7da52a084",
+   "url":"https://inventree.example/plugin/nfcscanner","reader":"nfc-34b7da52a084",
    "link":"ok","last_status":200,"poll_ms":1000,"wait_s":25,"queued":0,"dropped":0}
 > {"cmd":"net","action":"join","ssid":"workshop","psk":"..."}
 > {"cmd":"net","action":"forget","ssid":"workshop"}
-> {"cmd":"net","action":"server","url":"https://inventree.example/plugin/nfc-reader","token":"..."}
+> {"cmd":"net","action":"server","url":"https://inventree.example/plugin/nfcscanner","token":"..."}
 > {"cmd":"net","action":"poll","poll_ms":500,"wait_s":20}
 > {"cmd":"net","enabled":false}
 < {"evt":"net","wifi":"connected","link":"ok"}
@@ -288,7 +289,7 @@ Decided on 2026-10-05:
 
 - The reader reaches InvenTree at a configured URL; `inventree.davidiansmith.ca` here.
 - Long polling by default, falling back to a poll a second where the server does not hold.
-- The token in plain NVS is acceptable for now; secure storage later.
+- The token is in NVS, which is encrypted (HMAC scheme); see "Credentials and trust".
 - The plugin is written first, by us.
 
 - The project stays standalone: no esp-console-kit. Wi-Fi is a module of its own and
@@ -297,8 +298,8 @@ Decided on 2026-10-05:
 Still assumed:
 
 1. **Will an installed unit be reachable by USB?** Assumed not, hence N4.
-2. **One firmware or two?** Assumed one source tree and a Kconfig switch, so the desk unit's
-   build carries no radio code.
+2. **One firmware or two?** One source tree and a Kconfig switch; the default build has the
+   radio in, and a desk-only unit can turn it off.
 
 ## Where it stands (2026-10-06)
 
@@ -319,3 +320,15 @@ plugin serves firmware images to the reader's token.
 What remains: the plugin side of OTA (an endpoint that holds uploaded firmware and serves
 it to a scanner's token), and the `recovery guard off` headless configuration, which is a
 Kconfig change at install time.
+
+### Review fixes (2026-10-07)
+
+A review of both projects found, and these were fixed: a deadlock when a command from the
+plugin failed to parse (its error answer re-took the net link's lock); the updater matching
+the plugin's origin by string prefix, so a lookalike host would have received the token; a
+use after free in the updater's success path; the recovery guard on in the default build;
+cJSON's 1000-level nesting limit against small task stacks; a tight loop when the plugin
+answered without acknowledging; `hid` accepted from the network. Policy settled then: an
+update asked for over the network must come from the plugin's own origin and name its
+digest; the digest is always required; a new server URL drops the stored token unless a new
+one comes with it; a stored `http://` URL leaves the link off in a build that forbids http.

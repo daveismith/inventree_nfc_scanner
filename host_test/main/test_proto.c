@@ -159,6 +159,24 @@ static void test_parse_rejects_bad_arguments(void)
     assert_rejected("{\"cmd\":\"debug\",\"action\":\"explode\"}", APP_ERR_BAD_ARG, "debug");
 }
 
+static void test_parse_echoes_an_id_on_every_command(void)
+{
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"info\",\"id\":5}"));
+    TEST_ASSERT_TRUE(s_cmd.has_id);
+    TEST_ASSERT_EQUAL(5, s_cmd.id);
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"net\",\"id\":6}"));
+    TEST_ASSERT_EQUAL(6, s_cmd.id);
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"bootloader\",\"id\":7}"));
+    TEST_ASSERT_EQUAL(7, s_cmd.id);
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"info\"}"));
+    TEST_ASSERT_FALSE(s_cmd.has_id);
+    assert_rejected("{\"cmd\":\"info\",\"id\":\"x\"}", APP_ERR_BAD_ARG, "info");
+
+    /* The parser recurses; nesting is capped well within a task's stack. */
+    assert_rejected("{\"cmd\":\"info\",\"x\":[[[[[[[[[[[[1]]]]]]]]]]]]}", APP_ERR_BAD_JSON, NULL);
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"info\",\"x\":[[1]]}"));
+}
+
 static void test_parse_net_and_ota(void)
 {
     TEST_ASSERT_TRUE(parse("{\"cmd\":\"net\"}"));
@@ -201,8 +219,7 @@ static void test_parse_net_and_ota(void)
     TEST_ASSERT_TRUE(s_cmd.has_sha256);
     TEST_ASSERT_EQUAL_HEX8(0x01, s_cmd.sha256[0]);
     TEST_ASSERT_EQUAL_HEX8(0xEF, s_cmd.sha256[31]);
-    TEST_ASSERT_TRUE(parse("{\"cmd\":\"ota\",\"url\":\"http://10.0.0.2:8000/fw.bin\"}"));
-    TEST_ASSERT_FALSE(s_cmd.has_sha256);
+    assert_rejected("{\"cmd\":\"ota\",\"url\":\"http://10.0.0.2:8000/fw.bin\"}", APP_ERR_BAD_ARG, "ota");  /* no digest */
     assert_rejected("{\"cmd\":\"ota\"}", APP_ERR_BAD_ARG, "ota");
     assert_rejected("{\"cmd\":\"ota\",\"url\":\"https://h/fw\",\"sha256\":\"abc\"}", APP_ERR_BAD_ARG, "ota");
 }
@@ -378,6 +395,7 @@ void run_proto_tests(void)
     RUN_TEST(test_parse_program);
     RUN_TEST(test_parse_rejects_malformed_lines);
     RUN_TEST(test_parse_rejects_bad_arguments);
+    RUN_TEST(test_parse_echoes_an_id_on_every_command);
     RUN_TEST(test_parse_net_and_ota);
     RUN_TEST(test_format_net_and_ota_events);
     RUN_TEST(test_parse_accepts_the_largest_message_a_line_can_carry);

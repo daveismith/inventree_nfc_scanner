@@ -15,8 +15,9 @@ of that it has a few endpoints for the test harness:
 
     fake_plugin.py --port 8765 [--token secret] [--hold-max 25] [--poll-ms 0]
 
-With --token, a call must carry `Authorization: Token <token>` or is refused with 401; a
-reader id given with --reader is the only one accepted (404 otherwise).
+With --token, every call, the harness endpoints included, must carry `Authorization: Token
+<token>` or is refused with 401; a reader id given with --reader is the only one accepted
+(404 otherwise). It binds to 127.0.0.1 unless --bind says otherwise; on a LAN, use --token.
 """
 
 import argparse
@@ -88,6 +89,8 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if not self.authorised():
+            return self.reply(401, {'detail': 'Invalid token.'})
         with STATE['lock']:
             if self.path == '/log':
                 return self.reply(200, list(STATE['log']))
@@ -100,10 +103,18 @@ class Handler(BaseHTTPRequestHandler):
                 })
         self.reply(404, {'detail': 'no such page'})
 
+    def authorised(self):
+        return not STATE['token'] or self.headers.get('Authorization', '') == f'Token {STATE["token"]}'
+
     def do_POST(self):
         if self.path in ('/sync/', '/sync'):
             return self.sync()
-        obj = self.body()
+        if not self.authorised():
+            return self.reply(401, {'detail': 'Invalid token.'})
+        try:
+            obj = self.body()
+        except ValueError:
+            return self.reply(400, {'detail': 'malformed JSON'})
         with STATE['lock']:
             if self.path == '/queue':
                 seq = max([c['seq'] for c in STATE['commands']], default=STATE['seq_start']) + 1

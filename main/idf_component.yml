@@ -1,6 +1,6 @@
 ## IDF Component Manager Manifest File
-## Each local component declares what it needs from the registry itself:
-## components/usb_dev (esp_tinyusb) and components/proto (cjson).
+## Each local component declares what it needs from the registry itself: usb_dev
+## (esp_tinyusb), feedback (led_strip), proto and net_sync (cjson).
 dependencies:
   idf:
     version: ">=6.0"

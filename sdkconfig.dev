@@ -1,0 +1,13 @@
+# Development overrides, on top of sdkconfig.defaults:
+#
+#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
+#
+# A unit built from sdkconfig.defaults alone has neither of these.
+
+# The board sends itself to ROM download mode after a run of crashes or when no host
+# enumerates it, and the `debug` command exists. Not for a unit on a charger or out of reach.
+CONFIG_APP_DEV_RECOVERY=y
+
+# The plugin's local Docker instance is plain http. With this off, `net server` and `ota`
+# refuse http:// URLs and a stored http:// URL leaves the link off.
+CONFIG_APP_NET_ALLOW_HTTP=y

@@ -79,6 +79,8 @@ void settings_set_hid_default(bool enabled)
 void settings_net_load(settings_net_t *out)
 {
     memset(out, 0, sizeof(*out));
+    out->version = SETTINGS_NET_VERSION;
+    out->size = sizeof(*out);
     out->enabled = true;                /* on the air as soon as there is a network to join */
     out->poll_ms = CONFIG_APP_NET_POLL_MS;
     out->wait_s = CONFIG_APP_NET_WAIT_S;
@@ -88,8 +90,12 @@ void settings_net_load(settings_net_t *out)
         return;
     }
     settings_net_t stored;
-    size_t len = sizeof(stored);
-    if (nvs_get_blob(nvs, KEY_NET, &stored, &len) == ESP_OK && len == sizeof(stored)) {
+    size_t len = 0;
+    nvs_get_blob(nvs, KEY_NET, NULL, &len);  /* the stored size, if any */
+    const size_t stored_len = len;
+    len = sizeof(stored);
+    if (stored_len > 0 && stored_len <= sizeof(stored) && nvs_get_blob(nvs, KEY_NET, &stored, &len) == ESP_OK && len == sizeof(stored)
+            && stored.version == SETTINGS_NET_VERSION && stored.size == sizeof(stored)) {
         *out = stored;
         /* Whatever was stored, the strings end. */
         out->url[APP_NET_URL_MAX] = '\0';
@@ -101,9 +107,14 @@ void settings_net_load(settings_net_t *out)
         if (out->preferred >= SETTINGS_NETWORKS_MAX) {
             out->preferred = 0;
         }
-        if (out->poll_ms < 100) {
+        if (out->poll_ms < 100 || out->poll_ms > 60000) {
             out->poll_ms = CONFIG_APP_NET_POLL_MS;
         }
+        if (out->wait_s > 300) {
+            out->wait_s = CONFIG_APP_NET_WAIT_S;
+        }
+    } else if (stored_len > 0) {
+        ESP_LOGW(TAG, "stored network settings are from another firmware layout; starting from defaults");
     }
     nvs_close(nvs);
 }
@@ -115,8 +126,12 @@ void settings_net_save(const settings_net_t *net)
         ESP_LOGE(TAG, "cannot save the network settings");
         return;
     }
-    if (nvs_set_blob(nvs, KEY_NET, net, sizeof(*net)) == ESP_OK) {
+    settings_net_t copy = *net;
+    copy.version = SETTINGS_NET_VERSION;
+    copy.size = sizeof(copy);
+    if (nvs_set_blob(nvs, KEY_NET, &copy, sizeof(copy)) == ESP_OK) {
         nvs_commit(nvs);
     }
+    memset(&copy, 0, sizeof(copy));
     nvs_close(nvs);
 }

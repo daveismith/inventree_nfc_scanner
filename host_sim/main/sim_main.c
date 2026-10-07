@@ -129,9 +129,16 @@ static void env_sysinfo(void *ctx, app_sysinfo_t *out)
 static void env_hid_type(void *ctx, const char *text)
 {
     (void)ctx;
-    static char line[256];
-    const int n = snprintf(line, sizeof(line), "{\"sim\":\"hid\",\"text\":\"%s\"}\n", text);
-    write_all(line, (size_t)n);
+    static char line[512];
+    size_t at = (size_t)snprintf(line, sizeof(line), "{\"sim\":\"hid\",\"text\":\"");
+    for (; *text && at + 8 < sizeof(line); text++) {
+        if (*text == '"' || *text == '\\') {
+            line[at++] = '\\';
+        }
+        line[at++] = *text;
+    }
+    at += (size_t)snprintf(line + at, sizeof(line) - at, "\"}\n");
+    write_all(line, at);
 }
 
 static void env_enter_bootloader(void *ctx)

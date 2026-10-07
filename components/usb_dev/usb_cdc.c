@@ -1,5 +1,6 @@
 #include "usb_dev.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #include "esp_check.h"
@@ -30,7 +31,8 @@ static usb_dev_config_t s_cfg;
 static StreamBufferHandle_t s_rx;
 static SemaphoreHandle_t s_tx_lock;
 static volatile bool s_mounted;
-static volatile bool s_rx_overrun;
+static volatile size_t s_rx_accepted;              /* bytes put into the stream so far */
+static volatile size_t s_rx_lost_at = SIZE_MAX;    /* s_rx_accepted when bytes were lost; SIZE_MAX: none */
 static bool s_dtr;
 static bool s_touch_armed;
 
@@ -41,8 +43,10 @@ static void cdc_rx_cb(int itf, cdcacm_event_t *event)
     static uint8_t buf[CONFIG_TINYUSB_CDC_RX_BUFSIZE];
     size_t n = 0;
     while (tinyusb_cdcacm_read(itf, buf, sizeof(buf), &n) == ESP_OK && n > 0) {
-        if (xStreamBufferSend(s_rx, buf, n, 0) != n) {
-            s_rx_overrun = true;        /* the line being received is now damaged */
+        const size_t took = xStreamBufferSend(s_rx, buf, n, 0);
+        s_rx_accepted += took;
+        if (took != n && s_rx_lost_at == SIZE_MAX) {
+            s_rx_lost_at = s_rx_accepted;   /* the line in progress at this byte is damaged */
         }
     }
 }
@@ -107,15 +111,17 @@ static void rx_task(void *arg)
     static char line[USB_CDC_LINE_MAX];
     size_t len = 0;
     bool discard = false;
+    size_t consumed = 0;                /* bytes taken from the stream so far */
 
     for (;;) {
         uint8_t chunk[128];
         const size_t n = xStreamBufferReceive(s_rx, chunk, sizeof(chunk), portMAX_DELAY);
-        if (s_rx_overrun) {
-            s_rx_overrun = false;
-            discard = true;
-        }
         for (size_t i = 0; i < n; i++) {
+            if (consumed == s_rx_lost_at) {
+                s_rx_lost_at = SIZE_MAX;
+                discard = true;         /* from here to the next '\n' is what the loss cut */
+            }
+            consumed++;
             const char c = (char)chunk[i];
             if (c == '\n') {
                 if (discard) {

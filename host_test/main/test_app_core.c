@@ -669,7 +669,7 @@ static void test_links_a_closing_link_cancels_its_own_job(void)
 
     /* A session `hid` setting belongs to the link that made it. */
     forget();
-    cmd_from(1, true, "{\"cmd\":\"hid\",\"enabled\":false}");
+    cmd_from(1, false, "{\"cmd\":\"hid\",\"enabled\":false}");
     app_core_link(&s_core, 0, false);
     TEST_ASSERT_FALSE(app_core_hid_enabled(&s_core));
     app_core_link(&s_core, 1, false);
@@ -691,7 +691,12 @@ static void test_links_remote_refusals(void)
     cmd_from(1, true, "{\"cmd\":\"debug\",\"action\":\"crash\"}");
     ASSERT_LINE(0, "{\"rsp\":\"debug\",\"ok\":false,\"error\":\"not_allowed\"}");
 
-    /* Wipe, cancel, hid and log are fine from anywhere. */
+    forget();
+    cmd_from(1, true, "{\"cmd\":\"hid\",\"enabled\":false,\"persist\":true}");
+    ASSERT_LINE(0, "{\"rsp\":\"hid\",\"ok\":false,\"error\":\"not_allowed\"}");
+    TEST_ASSERT_TRUE(app_core_hid_enabled(&s_core));
+
+    /* Wipe, cancel and log are fine from anywhere. */
     forget();
     cmd_from(1, true, "{\"cmd\":\"wipe\",\"id\":3}");
     ASSERT_LINE(0, "{\"rsp\":\"wipe\",\"ok\":true,\"id\":3}");
@@ -710,7 +715,7 @@ static void test_net_and_ota_commands(void)
     cmd("{\"cmd\":\"net\"}");
     ASSERT_LINE(0, "{\"rsp\":\"net\",\"ok\":false,\"error\":\"unknown_cmd\"}");
     forget();
-    cmd("{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\"}");
+    cmd("{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\",\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}");
     ASSERT_LINE(0, "{\"rsp\":\"ota\",\"ok\":false,\"error\":\"unknown_cmd\"}");
 
     s_core.env.net = env_net;
@@ -735,13 +740,13 @@ static void test_net_and_ota_commands(void)
 
     /* An update is accepted when the reader is idle, and refused mid-job. */
     forget();
-    cmd("{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\"}");
+    cmd("{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\",\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}");
     ASSERT_LINE(0, "{\"rsp\":\"ota\",\"ok\":true}");
     TEST_ASSERT_EQUAL(1, s_ota_calls);
     forget();
     program("");
     forget();
-    cmd_from(1, true, "{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\"}");
+    cmd_from(1, true, "{\"cmd\":\"ota\",\"url\":\"https://h.example/fw.bin\",\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}");
     ASSERT_LINE(0, "{\"rsp\":\"ota\",\"ok\":false,\"error\":\"busy\"}");
     TEST_ASSERT_EQUAL(1, s_ota_calls);
 }

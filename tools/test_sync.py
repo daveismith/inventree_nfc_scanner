@@ -27,7 +27,15 @@ sys.path.insert(0, HERE)
 from nfcprog import build_ndef  # noqa: E402
 
 DEFAULT_ELF = os.path.join(HERE, '..', 'host_sim', 'build', 'host_sim.elf')
-PORT = 8765
+
+def free_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+PORT = free_port()
 URL = f'http://127.0.0.1:{PORT}'
 TOKEN = 'inv-test-token'
 READER = 'nfc-sim000000'
@@ -46,7 +54,8 @@ def check(condition, what, detail=None):
 
 def http(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(URL + path, data=data, method=method, headers={'Content-Type': 'application/json'})
+    req = urllib.request.Request(URL + path, data=data, method=method,
+                                 headers={'Content-Type': 'application/json', 'Authorization': f'Token {TOKEN}'})
     with urllib.request.urlopen(req, timeout=5) as r:
         return json.loads(r.read() or b'null')
 
@@ -144,7 +153,11 @@ def run_job(pty, job_id, overwrite=False, present_tag=True):
 def main():
     elf = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ELF
     plugin = start_plugin()
-    sim, pty_path = start_sim(elf)
+    try:
+        sim, pty_path = start_sim(elf)
+    except SystemExit:
+        plugin.kill()
+        raise
     pty = Pty(pty_path)
     try:
         pty.read(0.3)
@@ -196,7 +209,11 @@ def main():
         check(rsp and rsp[0]['link'] == 'unreachable' and rsp[0]['queued'] >= 2, 'with the server gone, taps queue up and the link says so', rsp)
         plugin = start_plugin(seq_start=last_seq)
         log = wait_for(lambda log: sum(1 for m in log if m.get('evt') == 'tag') >= 2, 40, 'the queued taps after the server returns')
-        check(all(m.get('evt') == 'tag' for m in log[:2]), 'and they are delivered when it is back', log)
+        # Anything else still unacknowledged when the server went (a result whose answer was
+        # dropped) comes along too, first, since it is older.
+        taps = [m for m in log if m.get('evt') == 'tag']
+        check(len(taps) >= 2 and all(m.get('evt') != 'tag' for m in log[:log.index(taps[0])]),
+              'and they are delivered when it is back, after anything older', log)
 
         # --- what a remote link may not do
         http('POST', '/queue', {'cmd': 'bootloader'})

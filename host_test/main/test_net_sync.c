@@ -15,12 +15,17 @@ static char s_body[4096];
 static char s_cmds[8][NET_SYNC_CMD_MAX];
 static int s_ncmds;
 
-static void on_cmd(void *ctx, const char *json, size_t len)
+static int s_cmd_room = 8;          /* how many commands on_cmd takes before refusing */
+
+static bool on_cmd(void *ctx, const char *json, size_t len)
 {
     (void)ctx;
-    TEST_ASSERT_TRUE(s_ncmds < 8);
+    if (s_ncmds >= s_cmd_room) {
+        return false;
+    }
     TEST_ASSERT_EQUAL(len, strlen(json));
     snprintf(s_cmds[s_ncmds++], sizeof(s_cmds[0]), "%s", json);
+    return true;
 }
 
 static bool queue(const char *line)
@@ -32,6 +37,7 @@ static void start(void)
 {
     net_sync_init(&s_ns, "nfc-34b7da52a084", 17, 1000, 25);
     s_ncmds = 0;
+    s_cmd_room = 8;
 }
 
 static size_t request(uint32_t now, bool hold)
@@ -100,8 +106,41 @@ static void test_commands_are_acted_on_once_and_acknowledged(void)
     TEST_ASSERT_EQUAL_STRING("{\"seq\":44,\"cmd\":\"info\"}", s_cmds[2]);
 
     /* Rubbish in the list is skipped. */
-    answer(3020, 200, "{\"ack\":0,\"cmds\":[7,{\"cmd\":\"info\"},{\"seq\":\"x\",\"cmd\":\"info\"}]}");
+    answer(3020, 200, "{\"ack\":0,\"cmds\":[7,{\"cmd\":\"info\"},{\"seq\":\"x\",\"cmd\":\"info\"},{\"seq\":1e12,\"cmd\":\"info\"}]}");
     TEST_ASSERT_EQUAL(3, s_ncmds);
+    TEST_ASSERT_EQUAL(44, s_ns.cmd_ack);                     /* the absurd seq did not pin the ack */
+
+    /* A command the receiver cannot take now is not acknowledged, so it comes again. */
+    s_cmd_room = 4;
+    answer(3030, 200, "{\"ack\":0,\"cmds\":[{\"seq\":45,\"cmd\":\"info\"},{\"seq\":46,\"cmd\":\"cancel\"}]}");
+    TEST_ASSERT_EQUAL(4, s_ncmds);
+    TEST_ASSERT_EQUAL(45, s_ns.cmd_ack);
+    s_cmd_room = 8;
+    answer(3040, 200, "{\"ack\":0,\"cmds\":[{\"seq\":45,\"cmd\":\"info\"},{\"seq\":46,\"cmd\":\"cancel\"}]}");
+    TEST_ASSERT_EQUAL(5, s_ncmds);
+    TEST_ASSERT_EQUAL_STRING("{\"seq\":46,\"cmd\":\"cancel\"}", s_cmds[4]);
+    TEST_ASSERT_EQUAL(46, s_ns.cmd_ack);
+
+    /* A command too long for any line is acknowledged and counted as dropped, not re-sent forever. */
+    static char huge[NET_SYNC_CMD_MAX + 200];
+    size_t at = (size_t)snprintf(huge, sizeof(huge), "{\"ack\":0,\"cmds\":[{\"seq\":47,\"cmd\":\"program\",\"ndef\":\"");
+    while (at < NET_SYNC_CMD_MAX + 100) {
+        huge[at++] = 'A';
+    }
+    snprintf(huge + at, sizeof(huge) - at, "\"}]}");
+    answer(3050, 200, huge);
+    TEST_ASSERT_EQUAL(5, s_ncmds);
+    TEST_ASSERT_EQUAL(47, s_ns.cmd_ack);
+    TEST_ASSERT_EQUAL(1, s_ns.dropped);
+
+    /* A new server starts the numbering again, and what was queued for the old one goes. */
+    queue("{\"evt\":\"done\",\"id\":5}");
+    net_sync_new_server(&s_ns);
+    TEST_ASSERT_EQUAL(0, s_ns.cmd_ack);
+    TEST_ASSERT_FALSE(net_sync_has_pending(&s_ns));
+    request(4000, true);
+    answer(4010, 200, "{\"ack\":0,\"cmds\":[{\"seq\":1,\"cmd\":\"info\"}]}");
+    TEST_ASSERT_EQUAL(6, s_ncmds);
 }
 
 static void test_pacing_plain_polling(void)
@@ -116,19 +155,28 @@ static void test_pacing_plain_polling(void)
     TEST_ASSERT_FALSE(net_sync_due(&s_ns, 1499));
     TEST_ASSERT_TRUE(net_sync_due(&s_ns, 1500));
 
-    /* Something to report: at once. */
+    /* Something new to report: at once. The same thing again, unacknowledged: at the idle
+     * pace, never in a tight loop. */
     request(1500, true);
     answer(1510, 200, "{\"ack\":0,\"cmds\":[]}");
     queue("{\"evt\":\"tag\",\"uid\":\"04\"}");
     TEST_ASSERT_TRUE(net_sync_due(&s_ns, 1511));
+    request(1511, false);
+    answer(1520, 200, "{\"cmds\":[]}");                      /* no ack at all */
+    TEST_ASSERT_TRUE(net_sync_has_pending(&s_ns));
+    TEST_ASSERT_EQUAL(991, net_sync_delay_ms(&s_ns, 1520));
+    queue("{\"evt\":\"done\",\"id\":1}");                  /* but a new message goes at once */
+    TEST_ASSERT_TRUE(net_sync_due(&s_ns, 1521));
+    request(1521, false);
+    answer(1530, 200, "{\"ack\":2,\"cmds\":[]}");
+    TEST_ASSERT_FALSE(net_sync_has_pending(&s_ns));
 
     /* The server asks for a slower pace. */
-    request(1511, true);
-    answer(1520, 200, "{\"ack\":1,\"cmds\":[],\"poll_ms\":5000}");
-    TEST_ASSERT_EQUAL(4989, net_sync_delay_ms(&s_ns, 1522));
-    answer(6600, 200, "{\"ack\":1,\"cmds\":[]}");             /* and stops asking */
+    request(1600, true);
+    answer(1610, 200, "{\"ack\":2,\"cmds\":[],\"poll_ms\":5000}");
+    TEST_ASSERT_EQUAL(4988, net_sync_delay_ms(&s_ns, 1612));
     request(6600, true);
-    answer(6610, 200, "{\"ack\":1,\"cmds\":[]}");
+    answer(6610, 200, "{\"ack\":2,\"cmds\":[]}");             /* and stops asking */
     TEST_ASSERT_EQUAL(990, net_sync_delay_ms(&s_ns, 6610));
 }
 
@@ -194,6 +242,22 @@ static void test_queue_makes_room_for_what_matters(void)
         TEST_ASSERT_TRUE(s_ns.queue[(s_ns.head + i) % NET_SYNC_QUEUE_LEN].keep);
     }
     TEST_ASSERT_EQUAL(1, s_ns.dropped);
+
+    /* Nothing but results, and no room: the oldest result goes, and is counted. */
+    queue("{\"evt\":\"done\",\"id\":7}");
+    TEST_ASSERT_EQUAL(NET_SYNC_QUEUE_LEN, s_ns.count);
+    TEST_ASSERT_EQUAL(2, s_ns.dropped);
+    TEST_ASSERT_EQUAL(2, s_ns.queue[s_ns.head].seq);
+
+    /* A message longer than a slot is dropped and counted, not truncated into bad JSON. */
+    static char big[NET_SYNC_MSG_MAX + 64];
+    size_t at = (size_t)snprintf(big, sizeof(big), "{\"evt\":\"failed\",\"id\":1,\"uri\":\"");
+    while (at < NET_SYNC_MSG_MAX + 10) {
+        big[at++] = 'x';
+    }
+    snprintf(big + at, sizeof(big) - at, "\"}");
+    TEST_ASSERT_FALSE(queue(big));
+    TEST_ASSERT_EQUAL(3, s_ns.dropped);
 
     /* The body reports what fits in the buffer, or nothing. */
     char small[64];

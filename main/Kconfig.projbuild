@@ -98,9 +98,9 @@ menu "InvenTree NFC scanner"
             help
                 The reader can also be driven by the InvenTree plugin over the network: it
                 joins Wi-Fi, polls the plugin for jobs and reports back, and can be updated
-                over the network. Off, none of that code is in the image. On, it stays off
-                the air until a network, the plugin's URL and a token have been set with the
-                `net` command over USB.
+                over the network. Off, none of that code is in the image. On, the radio
+                starts once a network has been saved with the `net` command over USB, and
+                the plugin is called once its URL and a token have been saved too.
 
         config APP_NET_POLL_MS
             int "Idle interval between calls to the plugin, in ms"
@@ -133,7 +133,7 @@ menu "InvenTree NFC scanner"
     menu "Development recovery"
         config APP_DEV_RECOVERY
             bool "Enter ROM download mode by itself when the firmware is unreachable"
-            default y
+            default n
             help
                 The board has no USB-UART bridge and TinyUSB owns its only USB port, so
                 firmware that crashes at boot or fails to enumerate cannot be told to enter
@@ -142,8 +142,9 @@ menu "InvenTree NFC scanner"
                 enumerates it after boot. It also adds the `debug` protocol command, which
                 provokes those failures on purpose.
 
-                Turn this off for a device in use. One powered from a charger has no host to
-                enumerate it, and would sit in download mode until power-cycled.
+                Off by default: a device in use, powered from a charger or reached only over
+                the network, has no host to enumerate it and would sit in download mode until
+                power-cycled. sdkconfig.dev turns it on for development.
 
         config APP_DEV_RECOVERY_BOOT_LOOPS
             int "Crashes in a row before giving up"

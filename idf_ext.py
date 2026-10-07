@@ -14,9 +14,12 @@ The firmware half is main/app_download_mode.c.
 If the protocol does not answer, a 1200 baud touch is tried: the firmware acts on that in the
 USB callback, without going through the protocol at all.
 
-Adapted from r2_domeplayer's idf_ext.py. Two differences. This board has no network, so there
-is no UDP trigger. And when no board is found, the flash is stopped rather than left to
-esptool's port autodetection, which sends its sync bytes to whatever serial devices it finds.
+Adapted from r2_domeplayer's idf_ext.py. Two differences. There is no UDP trigger: the
+network link is a client of the InvenTree plugin and listens on nothing. And when no board is
+found, the flash is stopped rather than left to esptool's port autodetection, which sends its
+sync bytes to whatever serial devices it finds. The board that went into download mode is
+recognised again by its USB serial number (its MAC), so another ESP32 on the bench is never
+flashed by mistake; with two scanners connected, -p must say which.
 
 The probe is skipped when an explicit -p was given, when ESPPORT is set in the environment
 (idf.py folds that into --port), or when IDF_NO_AUTO_DOWNLOAD=1.
@@ -77,13 +80,27 @@ def _ports_matching(pids):
     return [p for p in serial.tools.list_ports.comports() if p.vid == ESPRESSIF_VID and p.pid in pids]
 
 
-def _find_flashable_port():
+def _serial_of(port):
+    """A port's USB serial number, normalised: the app reports the MAC as 12 hex digits, the ROM
+    as colon-separated pairs."""
+    return (port.serial_number or '').replace(':', '').upper()
+
+
+def _find_flashable_port(serial=None):
+    """A port esptool can flash from. With `serial`, only the board with that serial number;
+    without, only if there is exactly one, since every ESP32 in download mode looks alike."""
     ports = _ports_matching(FLASHABLE_PIDS)
+    if serial:
+        ports = [p for p in ports if _serial_of(p) == serial]
+    if len(ports) > 1:
+        raise NoBoard(f'{len(ports)} boards are in download mode; pass -p to say which')
     return ports[0] if ports else None
 
 
 def _find_app_port():
     ports = _ports_matching({APP_PID})
+    if len(ports) > 1:
+        raise NoBoard(f'{len(ports)} scanners are connected ({", ".join(p.device for p in ports)}); pass -p to say which')
     return ports[0] if ports else None
 
 
@@ -131,10 +148,10 @@ def _touch_1200(device):
         _note(f'1200 baud touch: {e}')
 
 
-def _wait_for_flashable_port(timeout=PORT_WAIT_SECONDS):
+def _wait_for_flashable_port(serial=None, timeout=PORT_WAIT_SECONDS):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        found = _find_flashable_port()
+        found = _find_flashable_port(serial)
         if found:
             # The /dev node can appear slightly before the interface is usable.
             time.sleep(PORT_SETTLE_SECONDS)
@@ -178,10 +195,11 @@ def enter_download_mode():
             'plugging it in and pass its port with -p.'
         )
 
-    _note(f'Sending the bootloader command to {app_port.device}')
+    serial = _serial_of(app_port)
+    _note(f'Sending the bootloader command to {app_port.device} (serial {serial})')
     transcript = _send_trigger(app_port.device)
 
-    found = _wait_for_flashable_port()
+    found = _wait_for_flashable_port(serial)
     if not found:
         said = transcript[-120:] if transcript.strip() else b'nothing'
         _note(f'No download-mode port appeared within {PORT_WAIT_SECONDS:.0f}s (the device said: {said!r})')
@@ -189,7 +207,7 @@ def enter_download_mode():
         if still_there:
             _note('Trying a 1200 baud touch instead')
             _touch_1200(still_there.device)
-            found = _wait_for_flashable_port()
+            found = _wait_for_flashable_port(serial)
     if not found:
         raise NoBoard(
             'The board did not enter download mode. If something else holds its port '

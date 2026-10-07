@@ -1,5 +1,5 @@
 {
-	"name": "ESP-IDF QEMU",
+	"name": "InvenTree NFC scanner (ESP-IDF v6.1)",
 	"build": {
 		"dockerfile": "Dockerfile"
 	},

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
@@ -15,7 +16,7 @@
 #include "net_sync.h"
 
 #define CMD_RING    4
-#define RESP_MAX    8192
+#define RESP_MAX    16384
 
 static net_sync_t s_ns;
 static bool s_configured;
@@ -68,11 +69,15 @@ void sim_net_init(void)
         snprintf(s_host, sizeof(s_host), "%s", hostport);
         snprintf(s_port, sizeof(s_port), "80");
     }
-    size_t n = snprintf(s_path, sizeof(s_path), "%s", slash ? slash : "");
+    if (slash && strlen(slash) + sizeof("/sync/") > sizeof(s_path)) {
+        fprintf(stderr, "SIM_SYNC_URL path too long\n");
+        return;
+    }
+    size_t n = (size_t)snprintf(s_path, sizeof(s_path), "%s", slash ? slash : "");
     while (n > 0 && s_path[n - 1] == '/') {
         s_path[--n] = '\0';
     }
-    strncat(s_path, "/sync/", sizeof(s_path) - n - 1);
+    snprintf(s_path + n, sizeof(s_path) - n, "/sync/");
 
     snprintf(s_token, sizeof(s_token), "%s", getenv("SIM_TOKEN") ? getenv("SIM_TOKEN") : "");
     snprintf(s_reader, sizeof(s_reader), "%s", getenv("SIM_READER") ? getenv("SIM_READER") : "nfc-sim000000");
@@ -95,15 +100,16 @@ void sim_net_queue(const char *line, size_t len)
     }
 }
 
-static void on_cmd(void *ctx, const char *json, size_t len)
+static bool on_cmd(void *ctx, const char *json, size_t len)
 {
     (void)ctx;
     (void)len;
     if (s_cmd_count == CMD_RING) {
-        return;                         /* the main loop is behind; the server re-sends */
+        return false;                   /* the main loop is behind; unacknowledged, the server re-sends */
     }
     snprintf(s_cmds[(s_cmd_head + s_cmd_count) % CMD_RING], NET_SYNC_CMD_MAX, "%s", json);
     s_cmd_count++;
+    return true;
 }
 
 static void finish(void)
@@ -157,18 +163,91 @@ static bool begin_request(void)
     return true;
 }
 
-/* The answer, once the server has closed the connection. */
+/* A header's value, or NULL. Case-insensitive name; `headers` ends at the blank line. */
+static const char *header_value(const char *headers, const char *name)
+{
+    const size_t n = strlen(name);
+    for (const char *p = headers; (p = strchr(p, '\n')) != NULL; p++) {
+        if (strncasecmp(p + 1, name, n) == 0 && p[1 + n] == ':') {
+            const char *v = p + 2 + n;
+            while (*v == ' ') {
+                v++;
+            }
+            return v;
+        }
+    }
+    return NULL;
+}
+
+/* Undo chunked transfer coding in place. Returns the body's length, or -1 if malformed. */
+static long dechunk(char *body, size_t len)
+{
+    size_t in = 0, out = 0;
+    for (;;) {
+        char *end;
+        const unsigned long size = strtoul(body + in, &end, 16);
+        const char *crlf = strstr(end, "\r\n");
+        if (crlf == NULL) {
+            return -1;
+        }
+        in = (size_t)(crlf - body) + 2;
+        if (size == 0) {
+            return (long)out;
+        }
+        if (in + size + 2 > len) {
+            return -1;
+        }
+        memmove(body + out, body + in, size);
+        out += size;
+        in += size + 2;
+    }
+}
+
+/* The answer, once the server has closed the connection or the body is complete. */
 static void handle_response(void)
 {
     s_in[s_in_len] = '\0';
     int status = 0;
-    const char *body = strstr(s_in, "\r\n\r\n");
+    char *body = strstr(s_in, "\r\n\r\n");
     if (sscanf(s_in, "HTTP/%*d.%*d %d", &status) != 1 || body == NULL) {
         net_sync_unreachable(&s_ns, now_ms());  /* half an answer is no answer */
         return;
     }
+    *body = '\0';                        /* the headers end here, for header_value */
     body += 4;
-    net_sync_response(&s_ns, now_ms(), status, body, s_in_len - (size_t)(body - s_in), on_cmd, NULL);
+    long body_len = (long)(s_in_len - (size_t)(body - s_in));
+    const char *te = header_value(s_in, "Transfer-Encoding");
+    const char *cl = header_value(s_in, "Content-Length");
+    if (te && strncasecmp(te, "chunked", 7) == 0) {
+        body_len = dechunk(body, (size_t)body_len);
+    } else if (cl) {
+        const long want = atol(cl);
+        body_len = want <= body_len ? want : -1;
+    }
+    if (body_len < 0) {
+        net_sync_unreachable(&s_ns, now_ms());
+        return;
+    }
+    net_sync_response(&s_ns, now_ms(), status, body, (size_t)body_len, on_cmd, NULL);
+}
+
+/* With Content-Length, the body is complete before the server closes. */
+static bool response_complete(void)
+{
+    s_in[s_in_len] = '\0';
+    const char *body = strstr(s_in, "\r\n\r\n");
+    if (body == NULL) {
+        return false;
+    }
+    const char *cl = strstr(s_in, "\nContent-Length:");
+    if (cl == NULL || cl > body) {
+        cl = strstr(s_in, "\ncontent-length:");
+    }
+    if (cl == NULL || cl > body) {
+        return false;
+    }
+    const long want = atol(cl + 16);
+    return want >= 0 && s_in_len - (size_t)(body + 4 - s_in) >= (size_t)want;
 }
 
 static void step_request(void)
@@ -199,7 +278,11 @@ static void step_request(void)
     const ssize_t n = recv(s_fd, s_in + s_in_len, sizeof(s_in) - 1 - s_in_len, 0);
     if (n > 0) {
         s_in_len += (size_t)n;
-        if (s_in_len >= sizeof(s_in) - 1) {
+        if (response_complete()) {
+            finish();
+            handle_response();
+        } else if (s_in_len >= sizeof(s_in) - 1) {
+            fprintf(stderr, "sim_net: answer over %d bytes\n", RESP_MAX);
             finish();
             net_sync_unreachable(&s_ns, now_ms());
         }

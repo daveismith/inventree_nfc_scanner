@@ -2,9 +2,11 @@
 """Make a USB scanner look like a network scanner to the InvenTree plugin.
 
 Connects to the scanner over serial and speaks the plugin's `/sync` exchange on its behalf,
-exactly as the network firmware will: events from the scanner go up, numbered; commands
-come down, numbered, and are acknowledged once acted on. With it, the plugin's network
-route can be exercised with a real scanner and real tags before the firmware has a radio.
+as the firmware's own network link does: events from the scanner go up, numbered; commands
+come down, numbered, and are acknowledged once acted on. It lets the plugin's network route
+be exercised with a scanner that has no radio, or whose radio is off, and is the reference
+client the firmware's `net_sync` follows. Commands the firmware refuses from its network link
+(`bootloader`, `debug`, `net`, `hid`) are refused here too.
 
     sync_bridge.py --url http://inventree.localhost:8080/plugin/nfcscanner --token <api token>
 
@@ -22,7 +24,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, __import__('os').path.dirname(__import__('os').path.abspath(__file__)))
-from nfcprog import APP_PID, ESPRESSIF_VID, Device  # noqa: E402
+from nfcprog import APP_PID, ESPRESSIF_VID, Device, redacted  # noqa: E402
 
 POLL_MIN_S = 1.0        # never call more often than this when idle, whatever the server does
 BACKOFF_MAX_S = 30.0
@@ -79,12 +81,25 @@ class Bridge:
             headers={'Authorization': f'Token {self.token}', 'Content-Type': 'application/json'},
         )
         with urllib.request.urlopen(req, timeout=self.wait_s + 15) as r:
-            return json.loads(r.read())
+            try:
+                return json.loads(r.read())
+            except ValueError as e:
+                raise urllib.error.URLError(f'the server answered with something that is not JSON ({e})')
+
+    # The firmware refuses these from its own network link; over USB it cannot tell, so the
+    # bridge refuses them on its behalf and answers as the firmware would.
+    NOT_FROM_THE_NETWORK = {'bootloader', 'debug', 'net', 'hid'}
 
     def act(self, cmd):
         """Hand a command to the scanner. Its rsp and events come back through collect()."""
         payload = {k: v for k, v in cmd.items() if k != 'seq'}
-        self.log('command:', json.dumps(payload, separators=(',', ':'))[:120])
+        self.log('command:', json.dumps(redacted(payload), separators=(',', ':'))[:120])
+        if payload.get('cmd') in self.NOT_FROM_THE_NETWORK:
+            rsp = {'rsp': payload['cmd'], 'ok': False, 'error': 'not_allowed'}
+            if 'id' in payload:
+                rsp['id'] = payload['id']
+            self.queue(rsp)
+            return
         self.dev.send(payload)
 
     def run(self):

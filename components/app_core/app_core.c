@@ -168,6 +168,8 @@ static void cmd_info(app_core_t *core, const app_cmd_t *cmd)
         .origin = cmd->origin,
         .cmd = app_cmd_name(cmd->type),
         .ok = true,
+        .has_id = cmd->has_id,
+        .id = cmd->id,
         .sys = &sys,
         .state = app_core_state_name(core),
         .has_job = core->job_active,
@@ -234,6 +236,8 @@ static void cmd_hid(app_core_t *core, const app_cmd_t *cmd)
         .origin = cmd->origin,
         .cmd = app_cmd_name(cmd->type),
         .ok = true,
+        .has_id = cmd->has_id,
+        .id = cmd->id,
         .has_hid = true,
         .hid = app_core_hid_enabled(core),
     };
@@ -254,16 +258,19 @@ static void cmd_net(app_core_t *core, const app_cmd_t *cmd)
         .origin = cmd->origin,
         .cmd = app_cmd_name(cmd->type),
         .ok = true,
+        .has_id = cmd->has_id,
+        .id = cmd->id,
         .net = &status,
     };
     emit(core, &evt);
 }
 
 /* What a link that is not in hand may not do: anything that needs someone at the board to
- * undo it, and anything that changes how the device is reached. */
+ * undo it, anything that changes how the device is reached, and the keyboard, which types
+ * on the desk and whose session setting a remote link has no session to end. */
 static bool needs_hands(app_cmd_type_t type)
 {
-    return type == APP_CMD_BOOTLOADER || type == APP_CMD_DEBUG || type == APP_CMD_NET;
+    return type == APP_CMD_BOOTLOADER || type == APP_CMD_DEBUG || type == APP_CMD_NET || type == APP_CMD_HID;
 }
 
 void app_core_command(app_core_t *core, const app_cmd_t *cmd)

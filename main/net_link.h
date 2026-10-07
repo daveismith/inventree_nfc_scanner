@@ -24,6 +24,11 @@ app_err_t net_link_command(const app_cmd_t *cmd, app_net_status_t *status, const
 /* What `info` reports. The strings live until the next call. */
 void net_link_status(app_net_status_t *out);
 
-/* The plugin's URL as configured, "" when unset. For the updater, which may need the token. */
-const char *net_link_url(void);
-const char *net_link_token(void);
+/* The plugin's URL as configured, "" when unset, and a copy of the token. For the updater,
+ * which sends the token only to the plugin's own origin. */
+void net_link_server(char *url, size_t url_cap, char *token, size_t token_cap);
+
+/* Whether this build may use the URL: https, or http where CONFIG_APP_NET_ALLOW_HTTP; no
+ * user info. And whether two URLs share scheme, host and port. */
+bool url_allowed(const char *url);
+bool same_origin(const char *a, const char *b);

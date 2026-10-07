@@ -170,8 +170,37 @@ static void test_tlv_find_asks_for_more(void)
     TEST_ASSERT_EQUAL(9, need);
 }
 
+/* What comes off a tag goes into JSON strings and a text field: only well-formed UTF-8 does. */
+static void test_text_and_uri_must_be_utf8(void)
+{
+    uint8_t msg[128];
+    ndef_info_t info;
+    const size_t n = make_inventree_ndef(msg, sizeof(msg), "h/1", "INV-SL1");
+    TEST_ASSERT_TRUE(ndef_parse_message(msg, n, &info));
+    TEST_ASSERT_TRUE(info.has_text && info.has_uri);
+
+    uint8_t bad[128];
+    memcpy(bad, msg, n);
+    bad[n - 1] = 0xFF;                  /* the text's last byte: not UTF-8 */
+    TEST_ASSERT_TRUE(ndef_parse_message(bad, n, &info));
+    TEST_ASSERT_FALSE(info.has_text);
+    TEST_ASSERT_TRUE(info.has_uri);
+
+    memcpy(bad, msg, n);
+    bad[n - 1] = 0x00;                  /* an embedded NUL */
+    TEST_ASSERT_TRUE(ndef_parse_message(bad, n, &info));
+    TEST_ASSERT_FALSE(info.has_text);
+
+    /* Two-byte UTF-8 in the text is fine. */
+    const size_t m = make_inventree_ndef(msg, sizeof(msg), "h/1", "INV-SL1\xC3\xA9");
+    TEST_ASSERT_TRUE(ndef_parse_message(msg, m, &info));
+    TEST_ASSERT_TRUE(info.has_text);
+    TEST_ASSERT_EQUAL_STRING("INV-SL1\xC3\xA9", info.text);
+}
+
 void run_ndef_tests(void)
 {
+    RUN_TEST(test_text_and_uri_must_be_utf8);
     RUN_TEST(test_inventree_message_parses);
     RUN_TEST(test_empty_message_is_fine_but_not_programmable);
     RUN_TEST(test_truncated_message_is_rejected);

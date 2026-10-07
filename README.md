@@ -36,6 +36,19 @@ idf.py build
 idf.py flash
 ```
 
+That is the build for a unit in use. For development there is a second configuration file
+with the recovery guard (the board sends itself to download mode when it crashes or no host
+enumerates it, and the `debug` command) and plain `http://` plugin URLs, for the plugin's
+local Docker instance:
+
+```sh
+idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
+idf.py flash
+```
+
+The `-D` is needed once: it goes into the generated `sdkconfig`, which later builds reuse.
+Pass it to `build`, not to `flash`, where it stops the flash hook from running.
+
 The firmware owns the board's only USB port, so esptool cannot reset it into the bootloader
 the usual way. `idf_ext.py` handles that: before a flash it sends the running firmware the
 `bootloader` command, waits for the ROM's USB-Serial-JTAG port (`303a:1001`) and flashes
@@ -83,11 +96,13 @@ A command carries an origin: its `rsp` goes back to the link that sent it (the U
 the plugin over the network), events go to every link. From the network, `bootloader`,
 `debug` and `net` answer `not_allowed`. Closing the USB port cancels a job it started.
 
-Events: `hello`, `waiting`, `writing`, `done`, `failed`, `tag`, `tag_removed`, `error`, `log`.
+Events: `hello`, `waiting`, `writing`, `done`, `failed`, `tag`, `tag_removed`, `error`, `log`,
+and in network builds `net` (the link changed state) and `ota` (an update's progress).
 
 Errors: `bad_json`, `line_too_long`, `unknown_cmd`, `bad_arg`, `busy`, `no_job`, `timeout`,
 `cancelled`, `wrong_tag_type`, `multiple_tags`, `not_blank`, `auth_required`, `auth_failed`,
-`locked`, `too_large`, `tag_removed`, `write_failed`, `verify_failed`, `nfc_error`.
+`locked`, `too_large`, `tag_removed`, `write_failed`, `verify_failed`, `nfc_error`,
+`not_allowed` (not from this link).
 
 One job at a time. A tag already on the reader when a job starts is used at once. A tag
 pulled away mid-write is left holding an empty, valid message. `not_blank` reports the text
@@ -101,7 +116,7 @@ The mapping between lines and structs is `components/proto`; the behaviour is
 
 | | |
 | --- | --- |
-| `tools/nfcprog.py` | The protocol from the command line: `info`, `program --host H --pk N`, `wipe`, `cancel`, `hid on\|off`, `log LEVEL`, `monitor`, `bootloader`. Needs pyserial. |
+| `tools/nfcprog.py` | The protocol from the command line: `info`, `program --host H --pk N`, `wipe`, `cancel`, `hid on\|off`, `log LEVEL`, `monitor`, `bootloader`, `net ...`, `ota URL --file IMAGE`, `ndef`, `raw`. Needs pyserial. Passphrases and tokens are prompted for, not taken on the command line, and never echoed. With two scanners connected it insists on `--port`. |
 | `tools/webserial.html` | The same from a browser (Chrome or Edge), standing in for the InvenTree plugin page. |
 | `tools/test_sim.py` | Runs `nfcprog.py` against the host simulator. |
 | `tools/fake_plugin.py` | A stand-in for the InvenTree plugin's `/sync`, with endpoints to queue commands, read what the reader reported, and drop answers at random. |
@@ -115,12 +130,15 @@ The mapping between lines and structs is `components/proto`; the behaviour is
 Nothing below needs the board.
 
 ```sh
-# Unit tests: NDEF, PN532 frames, NTAG operations, protocol, state machine
-cd host_test && idf.py --preview set-target linux && idf.py build && ./build/host_test.elf
+# Unit tests: NDEF, PN532 frames, NTAG operations, protocol, state machine, the plugin
+# exchange, the Wi-Fi policy (each from the repository root)
+(cd host_test && idf.py --preview set-target linux && idf.py build && ./build/host_test.elf)
 
-# The firmware's logic as a host program on a pty, driven by the real harness
-cd host_sim && idf.py --preview set-target linux && idf.py build
+# The firmware's logic as a host program on a pty, driven by the real harness; then the
+# same over its network link against tools/fake_plugin.py
+(cd host_sim && idf.py --preview set-target linux && idf.py build)
 python tools/test_sim.py
+python tools/test_sync.py
 ```
 
 The NTAG tests run against a simulated tag (`host_test/components/sim_ntag`) that models

@@ -24,7 +24,7 @@ extern "C" {
 
 #define NET_SYNC_PROTO          1
 #define NET_SYNC_READER_MAX     32
-#define NET_SYNC_MSG_MAX        640     /* one queued message; a `failed` with text and uri is the longest */
+#define NET_SYNC_MSG_MAX        1024    /* one queued message; an `info` answer, or a `failed` carrying escaped text and uri */
 #define NET_SYNC_QUEUE_LEN      12
 #define NET_SYNC_CMD_MAX        2048    /* a command as handed on: the protocol's longest line */
 
@@ -58,12 +58,15 @@ typedef struct {
     int last_status;                    /* HTTP status of the last answer; -1 unreachable; 0 none yet */
     uint32_t last_started;              /* when the last call began, ms */
     uint32_t next_at;                   /* when the next may begin, ms */
+    uint32_t sent_through;              /* the newest message seq carried by a call so far */
     bool ever_called;
 
     char cmd_buf[NET_SYNC_CMD_MAX];     /* a command being handed on */
 } net_sync_t;
 
-typedef void (*net_sync_cmd_fn)(void *ctx, const char *json, size_t len);
+/* Returns false when it cannot take the command now; it is then not acknowledged, and the
+ * server sends it again. */
+typedef bool (*net_sync_cmd_fn)(void *ctx, const char *json, size_t len);
 
 /* `boot` is a number new to this run of the firmware, so the server knows the numbering
  * started again. `poll_ms` and `wait_s` are the configured pacing. */
@@ -74,10 +77,16 @@ void net_sync_set_pacing(net_sync_t *ns, uint32_t poll_ms, uint32_t wait_s);
 /* Settings changed: a refusal no longer stands, and the next call may go at once. */
 void net_sync_reconfigured(net_sync_t *ns);
 
+/* A different server: what was queued for the old one is dropped, and command numbering
+ * starts again, so the new server's first command is not mistaken for one already done. */
+void net_sync_new_server(net_sync_t *ns);
+
 /*
  * A line the state machine emitted for this link (with or without its '\n'). What the
  * server wants is queued, numbered; `hello`, `tag_removed`, `log` and `net` are not for it.
- * Returns true when queued. A tap may be dropped for room; a job's answer or result never is.
+ * Returns true when queued. For room, taps go first; a job's answer or result is dropped
+ * only when the queue holds nothing but those, which takes NET_SYNC_QUEUE_LEN of them
+ * unacknowledged. `dropped` counts every message lost for room or for size.
  */
 bool net_sync_queue(net_sync_t *ns, const char *line, size_t len);
 
@@ -98,8 +107,9 @@ size_t net_sync_request(net_sync_t *ns, uint32_t now_ms, bool hold, char *out, s
 /*
  * The server's answer: HTTP `status` and the body. On 200 the acknowledged messages are
  * dropped and each command not yet acted on is handed to `on_cmd`, oldest first (its `seq`
- * is left in; the protocol ignores it). Other statuses set the pacing: 401, 403 and 404 are
- * a refusal, the rest a back-off.
+ * is left in; the protocol ignores it). A command too long for the protocol's line is
+ * acknowledged and skipped, with `dropped` counting it. Other statuses set the pacing: 401,
+ * 403 and 404 are a refusal, the rest a back-off.
  */
 void net_sync_response(net_sync_t *ns, uint32_t now_ms, int status, const char *body, size_t len,
                        net_sync_cmd_fn on_cmd, void *ctx);
@@ -107,7 +117,8 @@ void net_sync_response(net_sync_t *ns, uint32_t now_ms, int status, const char *
 /* The call did not reach the server at all. */
 void net_sync_unreachable(net_sync_t *ns, uint32_t now_ms);
 
-/* For `net`: "off" is the caller's to say; this gives "ok", "unreachable", "refused" or "error". */
+/* For `net`: "off" and "no_wifi" are the caller's to say; this gives "idle" (nothing tried
+ * yet), "ok", "unreachable", "refused" or "error". */
 const char *net_sync_link_state(const net_sync_t *ns);
 
 #ifdef __cplusplus
