@@ -320,8 +320,8 @@ bool sim_net_step(char *cmd_out, size_t cap)
 
 void sim_net_status(app_net_status_t *out)
 {
-    static char url[256];
-    snprintf(url, sizeof(url), "http://%.*s:%.*s%.*s", (int)sizeof(s_host) - 1, s_host, (int)sizeof(s_port) - 1, s_port, (int)sizeof(s_path) - 1, s_path);
+    static char url[sizeof(s_host) + sizeof(s_port) + sizeof(s_path) + 16];   /* room for all three, whatever they hold */
+    snprintf(url, sizeof(url), "http://%s:%s%s", s_host, s_port, s_path);
     out->enabled = s_configured;
     out->wifi = "connected";
     out->ssid = "sim";
