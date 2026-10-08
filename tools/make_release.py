@@ -13,6 +13,9 @@ reads to decide whether, and to which scanners, a release may go:
      "app": {"file": "...", "size": 1234, "sha256": "...", "offset": 131072},
      "merged": {"file": "...", "size": 1234, "sha256": "...", "offset": 0}}
 
+`dev` is true for a development build packaged with --dev, for testing updates against a
+bench server over plain http; such a package is never published.
+
 `settings_version` is the layout of the network settings this firmware writes: a firmware
 with a lower one cannot read them, so a scanner on the network would lose its link. With
 --tag, the tag must be "v" + the version in version.txt, or nothing is written.
@@ -68,12 +71,16 @@ def main():
     ap.add_argument("--out", default=os.path.join(ROOT, "dist"))
     ap.add_argument("--tag", help="the release tag, checked against version.txt")
     ap.add_argument("--git-sha", help="the commit built (default: git rev-parse HEAD)")
+    ap.add_argument("--dev", action="store_true",
+                    help="package a development build (plain http allowed), for a bench server; never publish one")
     args = ap.parse_args()
 
     with open(os.path.join(ROOT, "version.txt")) as f:
         version = f.read().strip()
     if not re.fullmatch(r"\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?", version):
         sys.exit(f"version.txt holds {version!r}, not a version like 1.2.3 or 1.2.3-rc.1")
+    if args.dev and args.tag is not None:
+        sys.exit("a development build is never released")
     if args.tag is not None and args.tag != f"v{version}":
         sys.exit(f"tag {args.tag} does not match version.txt ({version}); expected v{version}")
 
@@ -84,7 +91,7 @@ def main():
     with open(os.path.join(args.build, "sdkconfig") if os.path.exists(os.path.join(args.build, "sdkconfig")) else desc["config_file"]) as f:
         config = f.read()
     for option in ("CONFIG_APP_DEV_RECOVERY=y", "CONFIG_APP_NET_ALLOW_HTTP=y"):
-        if option in config:
+        if option in config and not args.dev:
             sys.exit(f"{option} is set: this is a development build, not a release")
 
     git_sha = args.git_sha
@@ -118,6 +125,7 @@ def main():
         "settings_version": define("main/settings.h", "SETTINGS_NET_VERSION"),
         "min_plugin": MIN_PLUGIN,
         "git_sha": git_sha,
+        "dev": args.dev,
         "app": asset(app_file, app_offset),
         "merged": asset(merged_file, 0),
     }
