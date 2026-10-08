@@ -102,6 +102,10 @@ the plugin over the network), events go to every link. From the network, `bootlo
 A command that cannot be read is answered as a `rsp` under the name given, with
 `unknown_cmd`; a line that is not a command object at all gets an `error` event.
 
+`hello` (sent when the port opens) and `info` carry `fw`, the firmware version, and `reader`,
+the scanner's id (`nfc-` and its MAC address), the same id it uses over the network. The
+plugin knows a scanner by it, whether it is plugged in or on Wi-Fi.
+
 Events: `hello`, `waiting`, `writing`, `done`, `failed`, `tag`, `tag_removed`, `error`, `log`,
 and in network builds `net` (the link changed state) and `ota` (an update's progress).
 

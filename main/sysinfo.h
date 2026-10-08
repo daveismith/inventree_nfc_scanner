@@ -8,6 +8,10 @@
 /* Read once at boot: why the chip reset, and whether the last run left a core dump. */
 void sysinfo_init(void);
 
+/* The scanner's id, "nfc-" and its MAC address: how the plugin knows it, over USB or the
+ * network. Valid from sysinfo_init(). */
+const char *sysinfo_reader(void);
+
 /* What `info` reports about the system. The strings live as long as the firmware runs. */
 void sysinfo_get(app_sysinfo_t *out);
 

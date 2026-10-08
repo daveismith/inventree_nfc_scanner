@@ -85,7 +85,7 @@ void sim_net_init(void)
     const uint32_t poll_ms = getenv("SIM_POLL_MS") ? (uint32_t)atoi(getenv("SIM_POLL_MS")) : 1000;
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
     const uint32_t boot = getenv("SIM_BOOT") ? (uint32_t)atoi(getenv("SIM_BOOT")) : (uint32_t)(rand() % 1000000 + 1);
-    net_sync_init(&s_ns, s_reader, boot, poll_ms, s_wait_s);
+    net_sync_init(&s_ns, s_reader, getenv("SIM_FW") ? getenv("SIM_FW") : "sim", boot, poll_ms, s_wait_s);
     signal(SIGPIPE, SIG_IGN);           /* a server that hangs up mid-request is a failed call, not the end */
     s_configured = true;
     printf("NET %s:%s%s as %s (boot %u, wait %u s, poll %u ms)\n", s_host, s_port, s_path, s_reader,

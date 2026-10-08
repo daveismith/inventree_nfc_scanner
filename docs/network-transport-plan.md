@@ -52,6 +52,7 @@ Content-Type: application/json
 
 {
   "reader": "nfc-0123456789ab",     who is calling: fixed, from the MAC
+  "fw": "0.2.0",                    the firmware it runs, for the plugin's fleet page
   "boot": 17,                       changes every time the reader restarts
   "proto": 1,
   "ack": 41,                        the highest command seq the reader has acted on

@@ -79,7 +79,7 @@ def start_plugin(**kw):
 
 
 def start_sim(elf, **env):
-    e = dict(os.environ, SIM_SYNC_URL=URL, SIM_TOKEN=TOKEN, SIM_READER=READER, SIM_POLL_MS='300')
+    e = dict(os.environ, SIM_SYNC_URL=URL, SIM_TOKEN=TOKEN, SIM_READER=READER, SIM_FW='0.2.0-sim', SIM_POLL_MS='300')
     e.update({k: str(v) for k, v in env.items()})
     proc = subprocess.Popen([elf], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=e)
     deadline = time.monotonic() + 10
@@ -168,6 +168,7 @@ def main():
         wait_for(lambda log: len(log) >= 1, 5, 'the first tap to reach the server')
         log = http('GET', '/log')
         check(log[0].get('evt') == 'tag' and log[0].get('uid') == '04A1B2C3D4E5F6', 'a tap outside a job reaches the server', log)
+        check(http('GET', '/state')['fw'] == '0.2.0-sim', 'every call says which firmware the reader runs', http('GET', '/state')['fw'])
 
         # --- a job, start to finish, exactly once
         log = run_job(pty, 1)

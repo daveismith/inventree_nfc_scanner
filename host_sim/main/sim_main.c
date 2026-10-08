@@ -112,7 +112,8 @@ static uint32_t env_now_ms(void *ctx)
 static void env_sysinfo(void *ctx, app_sysinfo_t *out)
 {
     (void)ctx;
-    out->fw = "sim";
+    out->reader = getenv("SIM_READER") ? getenv("SIM_READER") : "nfc-sim000000";
+    out->fw = getenv("SIM_FW") ? getenv("SIM_FW") : "sim";
     out->idf = "host";
     out->pn532_ok = s_nfc_ok;
     out->pn532_ic = 0x32;

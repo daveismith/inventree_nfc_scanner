@@ -345,7 +345,7 @@ static void test_format_tag_events(void)
 static void test_format_responses(void)
 {
     app_sysinfo_t sys = {
-        .fw = "0.1.0", .idf = "v6.1", .pn532_ok = true, .pn532_ic = 0x32, .pn532_ver = 1, .pn532_rev = 6,
+        .reader = "nfc-34b7da52a084", .fw = "0.1.0", .idf = "v6.1", .pn532_ok = true, .pn532_ic = 0x32, .pn532_ver = 1, .pn532_rev = 6,
         .buzzer = false, .reset = "poweron", .crash = NULL, .uptime_ms = 1234,
     };
     app_evt_t evt = {
@@ -353,7 +353,7 @@ static void test_format_responses(void)
         .has_hid = true, .hid = true,
     };
     TEST_ASSERT_EQUAL_STRING(
-        "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"idf\":\"v6.1\","
+        "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"reader\":\"nfc-34b7da52a084\",\"idf\":\"v6.1\","
         "\"pn532\":{\"ic\":50,\"ver\":\"1.6\"},\"state\":\"idle\",\"job\":null,\"tag\":null,\"hid\":true,"
         "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":null,\"uptime_ms\":1234,\"net\":null}", format(&evt));
 
@@ -365,7 +365,7 @@ static void test_format_responses(void)
     evt.uid_len = 7;
     memcpy(evt.uid, ((const uint8_t[]){ 0x04, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6 }), 7);
     TEST_ASSERT_EQUAL_STRING(
-        "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"idf\":\"v6.1\","
+        "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"reader\":\"nfc-34b7da52a084\",\"idf\":\"v6.1\","
         "\"pn532\":null,\"state\":\"nfc_error\",\"job\":7,\"tag\":\"04A1B2C3D4E5F6\",\"hid\":true,"
         "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":\"panic in \\\"nfc_app\\\"\",\"uptime_ms\":1234,\"net\":null}",
         format(&evt));
@@ -377,7 +377,7 @@ static void test_format_responses(void)
     TEST_ASSERT_EQUAL_STRING("{\"rsp\":\"hid\",\"ok\":true,\"enabled\":false}", format(&evt));
 
     evt = (app_evt_t){ .type = APP_EVT_HELLO, .sys = &sys };
-    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"hello\",\"proto\":1,\"fw\":\"0.1.0\"}", format(&evt));
+    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"hello\",\"proto\":1,\"fw\":\"0.1.0\",\"reader\":\"nfc-34b7da52a084\"}", format(&evt));
 }
 
 static void test_format_log_stays_one_line(void)

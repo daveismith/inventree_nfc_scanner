@@ -24,6 +24,7 @@ extern "C" {
 
 #define NET_SYNC_PROTO          1
 #define NET_SYNC_READER_MAX     32
+#define NET_SYNC_FW_MAX         32
 #define NET_SYNC_MSG_MAX        2080    /* one queued message: the protocol's longest line, with its "seq" */
 #define NET_SYNC_QUEUE_LEN      12
 #define NET_SYNC_CMD_MAX        2048    /* a command as handed on: the protocol's longest line */
@@ -41,6 +42,7 @@ typedef struct {
 
 typedef struct {
     char reader[NET_SYNC_READER_MAX];
+    char fw[NET_SYNC_FW_MAX];            /* the firmware version, so the server knows what each scanner runs */
     uint32_t boot;
     uint32_t last_seq;                  /* of the messages queued so far */
     uint32_t cmd_ack;                   /* the highest command seq acted on: the `ack` sent */
@@ -71,7 +73,7 @@ typedef bool (*net_sync_cmd_fn)(void *ctx, const char *json, size_t len);
 
 /* `boot` is a number new to this run of the firmware, so the server knows the numbering
  * started again. `poll_ms` and `wait_s` are the configured pacing. */
-void net_sync_init(net_sync_t *ns, const char *reader, uint32_t boot, uint32_t poll_ms, uint32_t wait_s);
+void net_sync_init(net_sync_t *ns, const char *reader, const char *fw, uint32_t boot, uint32_t poll_ms, uint32_t wait_s);
 
 void net_sync_set_pacing(net_sync_t *ns, uint32_t poll_ms, uint32_t wait_s);
 

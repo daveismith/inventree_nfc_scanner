@@ -163,6 +163,7 @@ typedef struct {
 
 /* What `info` reports that the state machine does not itself know. */
 typedef struct {
+    const char *reader;         /* "nfc-" and the MAC in lower-case hex: the same on USB and the network */
     const char *fw;
     const char *idf;
     bool pn532_ok;

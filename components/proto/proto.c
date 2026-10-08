@@ -488,6 +488,9 @@ static void add_info(cJSON *obj, const app_evt_t *evt)
     const app_sysinfo_t *sys = evt->sys;
     cJSON_AddNumberToObject(obj, "proto", APP_PROTO_VERSION);
     add_string(obj, "fw", sys->fw);
+    if (sys->reader) {
+        add_string(obj, "reader", sys->reader);
+    }
     add_string(obj, "idf", sys->idf);
     if (sys->pn532_ok) {
         char ver[12];
@@ -629,6 +632,9 @@ size_t proto_format(const app_evt_t *evt, char *out, size_t cap)
         cJSON_AddNumberToObject(obj, "proto", APP_PROTO_VERSION);
         if (evt->sys) {
             add_string(obj, "fw", evt->sys->fw);
+            if (evt->sys->reader) {
+                add_string(obj, "reader", evt->sys->reader);
+            }
         }
         break;
     case APP_EVT_WAITING:

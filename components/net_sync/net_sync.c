@@ -5,10 +5,18 @@
 
 #include "cJSON.h"
 
-void net_sync_init(net_sync_t *ns, const char *reader, uint32_t boot, uint32_t poll_ms, uint32_t wait_s)
+void net_sync_init(net_sync_t *ns, const char *reader, const char *fw, uint32_t boot, uint32_t poll_ms, uint32_t wait_s)
 {
     memset(ns, 0, sizeof(*ns));
     snprintf(ns->reader, sizeof(ns->reader), "%s", reader);
+    /* Put in the body unescaped, so only what a version string needs is kept. */
+    size_t n = 0;
+    for (const char *c = fw ? fw : ""; *c && n + 1 < sizeof(ns->fw); c++) {
+        if ((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || strchr(".-+_", *c)) {
+            ns->fw[n++] = *c;
+        }
+    }
+    ns->fw[n] = '\0';
     ns->boot = boot;
     net_sync_set_pacing(ns, poll_ms, wait_s);
 }
@@ -175,10 +183,10 @@ static bool put(char *out, size_t cap, size_t *at, const char *s, size_t n)
 
 size_t net_sync_request(net_sync_t *ns, uint32_t now_ms, bool hold, char *out, size_t cap)
 {
-    char head[160];
+    char head[200];
     const int n = snprintf(head, sizeof(head),
-                           "{\"reader\":\"%s\",\"boot\":%lu,\"proto\":%d,\"ack\":%lu,\"wait_s\":%lu,\"msgs\":[",
-                           ns->reader, (unsigned long)ns->boot, NET_SYNC_PROTO, (unsigned long)ns->cmd_ack,
+                           "{\"reader\":\"%s\",\"fw\":\"%s\",\"boot\":%lu,\"proto\":%d,\"ack\":%lu,\"wait_s\":%lu,\"msgs\":[",
+                           ns->reader, ns->fw, (unsigned long)ns->boot, NET_SYNC_PROTO, (unsigned long)ns->cmd_ack,
                            (unsigned long)(hold ? ns->wait_s : 0));
     size_t at = 0;
     if (n < 0 || !put(out, cap, &at, head, (size_t)n)) {
