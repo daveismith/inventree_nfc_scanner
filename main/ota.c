@@ -35,6 +35,10 @@ static bool s_host_ok;
 static bool s_usb_host_seen;
 static bool s_net_settings_known;
 static volatile bool s_net_running;     /* an image is being fetched over the network */
+/* A new image is ready and the restart is coming. Until it does, the reader must stay idle:
+ * a restart in the middle of an I2C exchange leaves the PN532, which keeps its power, stuck
+ * until it is unplugged. */
+static volatile bool s_restarting;
 static ota_stream_t s_stream;           /* or sent over USB */
 
 static void confirm_if_due(void)
@@ -135,7 +139,7 @@ void ota_net_settings_known(void)
 
 bool ota_in_progress(void)
 {
-    return s_net_running || ota_stream_active(&s_stream);
+    return s_net_running || s_restarting || ota_stream_active(&s_stream);
 }
 
 bool ota_net_claim(void)
@@ -322,6 +326,9 @@ app_err_t ota_command(const app_cmd_t *cmd, const char **detail)
     const bool was_active = ota_stream_active(&s_stream);
     const app_err_t err = ota_stream_command(&s_stream, cmd, now_ms(), detail);
     if (err == APP_ERR_NONE && cmd->type == APP_CMD_OTA_END) {
+        /* Set here, in the app task, before it goes back to its loop: the reader is not
+         * polled again, so the restart cannot cut an exchange with it short. */
+        s_restarting = true;
         ESP_LOGI(TAG, "update over USB written; restarting into it");
         if (xTaskCreate(restart_task, "ota_restart", 3072, NULL, 3, NULL) != pdPASS) {
             ota_restart_when_free();
