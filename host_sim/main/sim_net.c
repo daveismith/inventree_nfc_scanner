@@ -64,23 +64,23 @@ void sim_net_init(void)
     const char *colon = strchr(hostport, ':');
     if (colon) {
         snprintf(s_host, sizeof(s_host), "%.*s", (int)(colon - hostport), hostport);
-        snprintf(s_port, sizeof(s_port), "%s", colon + 1);
+        snprintf(s_port, sizeof(s_port), "%.*s", (int)sizeof(s_port) - 1, colon + 1);
     } else {
-        snprintf(s_host, sizeof(s_host), "%s", hostport);
+        snprintf(s_host, sizeof(s_host), "%.*s", (int)sizeof(s_host) - 1, hostport);
         snprintf(s_port, sizeof(s_port), "80");
     }
     if (slash && strlen(slash) + sizeof("/sync/") > sizeof(s_path)) {
         fprintf(stderr, "SIM_SYNC_URL path too long\n");
         return;
     }
-    size_t n = (size_t)snprintf(s_path, sizeof(s_path), "%s", slash ? slash : "");
+    size_t n = (size_t)snprintf(s_path, sizeof(s_path), "%.*s", (int)sizeof(s_path) - 1, slash ? slash : "");
     while (n > 0 && s_path[n - 1] == '/') {
         s_path[--n] = '\0';
     }
     snprintf(s_path + n, sizeof(s_path) - n, "/sync/");
 
-    snprintf(s_token, sizeof(s_token), "%s", getenv("SIM_TOKEN") ? getenv("SIM_TOKEN") : "");
-    snprintf(s_reader, sizeof(s_reader), "%s", getenv("SIM_READER") ? getenv("SIM_READER") : "nfc-sim000000");
+    snprintf(s_token, sizeof(s_token), "%.*s", (int)sizeof(s_token) - 1, getenv("SIM_TOKEN") ? getenv("SIM_TOKEN") : "");
+    snprintf(s_reader, sizeof(s_reader), "%.*s", (int)sizeof(s_reader) - 1, getenv("SIM_READER") ? getenv("SIM_READER") : "nfc-sim000000");
     s_wait_s = getenv("SIM_WAIT_S") ? (uint32_t)atoi(getenv("SIM_WAIT_S")) : 0;
     const uint32_t poll_ms = getenv("SIM_POLL_MS") ? (uint32_t)atoi(getenv("SIM_POLL_MS")) : 1000;
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
@@ -321,7 +321,7 @@ bool sim_net_step(char *cmd_out, size_t cap)
 void sim_net_status(app_net_status_t *out)
 {
     static char url[256];
-    snprintf(url, sizeof(url), "http://%s:%s%s", s_host, s_port, s_path);
+    snprintf(url, sizeof(url), "http://%.*s:%.*s%.*s", (int)sizeof(s_host) - 1, s_host, (int)sizeof(s_port) - 1, s_port, (int)sizeof(s_path) - 1, s_path);
     out->enabled = s_configured;
     out->wifi = "connected";
     out->ssid = "sim";
