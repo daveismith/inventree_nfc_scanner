@@ -42,8 +42,9 @@ Not done:
 
 - Phase 6 extras: GitHub artifact attestations; the ROM-bootloader flasher in the browser
   (the merged image and its manifest entry are in place for it).
-- Fetching from the real repository, which is private until it goes public; the fetch is
-  checked against a stand-in for GitHub's API.
+- Taking a real release from GitHub. The repository is public and the plugin's check reaches
+  it with no token (2026-10-08: no releases yet, no errors); taking one is checked against a
+  stand-in for GitHub's API.
 - The first tagged release. Pushing `v0.2.0` after merging would exercise the workflow.
 
 ## What exists today
