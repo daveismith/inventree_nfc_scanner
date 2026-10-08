@@ -50,8 +50,12 @@ static void cdc_rx_cb(int itf, cdcacm_event_t *event)
         const size_t took = xStreamBufferSend(s_rx, buf, n, 0);
         s_rx_accepted += took;
         if (took != n) {
-            /* The line in progress at this byte is damaged, through its end. */
-            if (s_loss_w - s_loss_r < LOSS_RING) {
+            /* The line in progress at this byte is damaged, through its end. More lost at the
+             * same position, while the stream stays full, is the same loss. */
+            const bool same = s_loss_w != s_loss_r && s_loss_pos[(s_loss_w - 1) % LOSS_RING] == s_rx_accepted;
+            if (same) {
+                /* already recorded */
+            } else if (s_loss_w - s_loss_r < LOSS_RING) {
                 s_loss_pos[s_loss_w % LOSS_RING] = s_rx_accepted;
                 s_loss_w++;
             } else {

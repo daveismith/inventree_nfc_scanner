@@ -390,13 +390,17 @@ bool proto_parse(const char *line, size_t len, app_cmd_t *cmd, proto_err_t *err)
     } else {
         /* Answered as a `rsp` under the name given, so the sender can match it up. A long name
          * is cut, on a character boundary so the answer is still a string. */
-        snprintf(err->name, sizeof(err->name), "%s", name->valuestring);
-        for (size_t i = strlen(err->name); i > 0 && (err->name[i - 1] & 0xC0) == 0x80; i--) {
-            err->name[i - 1] = '\0';
+        const size_t full = strlen(name->valuestring);
+        size_t keep = full < sizeof(err->name) ? full : sizeof(err->name) - 1;
+        if (keep < full) {
+            /* Cut: step back over the continuation bytes of a character left incomplete,
+             * then over its lead byte, so what remains is whole characters. */
+            while (keep > 0 && (name->valuestring[keep] & 0xC0) == 0x80) {
+                keep--;
+            }
         }
-        if (strlen(err->name) == sizeof(err->name) - 1 && (err->name[sizeof(err->name) - 2] & 0x80)) {
-            err->name[sizeof(err->name) - 2] = '\0';       /* the lead byte of a cut character */
-        }
+        memcpy(err->name, name->valuestring, keep);
+        err->name[keep] = '\0';
         err->cmd = err->name;
         ok = parse_id(obj, false, cmd, err) && fail(err, APP_ERR_UNKNOWN_CMD, "");
     }

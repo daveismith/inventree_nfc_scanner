@@ -21,6 +21,8 @@ void ota_init(void);
 void ota_note_reader_up(void);
 void ota_note_host_ok(void);
 void ota_note_usb_host(void);
+/* From the network link once its settings are loaded: a USB host seen before then is judged now. */
+void ota_net_settings_known(void);
 
 /* For app_core's environment: start an update. Progress comes as `ota` events. From a remote
  * link the image must be on the plugin's own origin; the digest is always required. */

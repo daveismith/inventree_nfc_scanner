@@ -307,6 +307,7 @@ static void exchange(http_ctx_t *h, bool hold)
     unlock();
     if (body_len == 0) {
         ESP_LOGE(TAG, "the request did not fit");   /* cannot happen: an empty call always fits */
+        memset(h->auth, 0, sizeof(h->auth));
         s_holding = false;
         vTaskDelay(pdMS_TO_TICKS(1000));
         return;
@@ -441,6 +442,7 @@ void net_link_init(void)
     apply_networks();
     s_configured_flag = configured();
     unlock();
+    ota_net_settings_known();
     ESP_LOGI(TAG, "reader %s, %s, plugin %s", s_reader, s_cfg.enabled ? "enabled" : "disabled",
              s_cfg.url[0] ? s_cfg.url : "(unset)");
     if (s_cfg.url[0] && !url_allowed(s_cfg.url)) {

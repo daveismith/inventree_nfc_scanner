@@ -405,6 +405,12 @@ static void test_format_sheds_text_and_uri_to_fit(void)
     TEST_ASSERT_EQUAL(APP_ERR_UNKNOWN_CMD, s_err.error);
     TEST_ASSERT_EQUAL(0, strlen(s_err.cmd) % 2);               /* whole two-byte characters only */
     TEST_ASSERT_TRUE(strlen(s_err.cmd) < sizeof(s_err.name));
+    TEST_ASSERT_FALSE(parse("{\"cmd\":\"\xC3\xA9\"}"));         /* a short name is kept whole */
+    TEST_ASSERT_EQUAL_STRING("\xC3\xA9", s_err.cmd);
+    TEST_ASSERT_FALSE(parse("{\"cmd\":\"aaaaaaaaaaaaaaaaaaaaa\xC3\xA9\"}"));   /* 23 bytes: fits, whole */
+    TEST_ASSERT_EQUAL_STRING("aaaaaaaaaaaaaaaaaaaaa\xC3\xA9", s_err.cmd);
+    TEST_ASSERT_FALSE(parse("{\"cmd\":\"aaaaaaaaaaaaaaaaaaaaaa\xE2\x82\xAC\"}"));   /* a 3-byte character cut: dropped whole */
+    TEST_ASSERT_EQUAL_STRING("aaaaaaaaaaaaaaaaaaaaaa", s_err.cmd);
 }
 
 static void test_format_reports_what_does_not_fit(void)

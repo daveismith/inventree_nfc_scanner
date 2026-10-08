@@ -102,13 +102,29 @@ void ota_note_host_ok(void)
     confirm_if_due();
 }
 
-void ota_note_usb_host(void)
+static bool s_usb_host_seen;
+static bool s_net_settings_known;
+
+static void judge_usb_host(void)
 {
     /* A unit configured for the plugin proves itself by reaching the plugin; being plugged
      * into something that enumerates it says nothing about its network code. */
-    if (!net_link_configured()) {
+    if (s_usb_host_seen && s_net_settings_known && !net_link_configured()) {
         ota_note_host_ok();
     }
+}
+
+void ota_note_usb_host(void)
+{
+    /* USB comes up before the network settings are read; the judgement waits for them. */
+    s_usb_host_seen = true;
+    judge_usb_host();
+}
+
+void ota_net_settings_known(void)
+{
+    s_net_settings_known = true;
+    judge_usb_host();
 }
 
 bool ota_in_progress(void)
