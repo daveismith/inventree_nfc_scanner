@@ -79,14 +79,16 @@ static app_err_t env_net(void *ctx, const app_cmd_t *cmd, app_net_status_t *stat
 }
 
 static app_cmd_t s_ota_cmd;
+static app_err_t s_ota_err;
+static const char *s_ota_detail;
 
 static app_err_t env_ota(void *ctx, const app_cmd_t *cmd, const char **detail)
 {
     (void)ctx;
     s_ota_cmd = *cmd;
     s_ota_calls++;
-    *detail = NULL;
-    return APP_ERR_NONE;
+    *detail = s_ota_detail;
+    return s_ota_err;
 }
 
 static bool s_updating;
@@ -801,6 +803,16 @@ static void test_serial_ota_is_for_usb_only(void)
     cmd("{\"cmd\":\"ota_data\",\"id\":3,\"at\":0,\"data\":\"AAEC\"}");
     TEST_ASSERT_EQUAL(2, s_ota_calls);
     TEST_ASSERT_EQUAL(3, s_ota_cmd.ndef_len);
+
+    /* A refusal carries the environment's reason (whatever order the compiler evaluates in). */
+    start();
+    s_core.env.ota = env_ota;
+    s_ota_err = APP_ERR_VERIFY_FAILED;
+    s_ota_detail = "sha256 does not match";
+    cmd("{\"cmd\":\"ota_end\",\"id\":3}");
+    ASSERT_LINE(0, "{\"rsp\":\"ota_end\",\"ok\":false,\"id\":3,\"error\":\"verify_failed\",\"detail\":\"sha256 does not match\"}");
+    s_ota_err = APP_ERR_NONE;
+    s_ota_detail = NULL;
 }
 
 static void test_bootloader_log_and_hello(void)

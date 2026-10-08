@@ -345,8 +345,11 @@ void app_core_command(app_core_t *core, const app_cmd_t *cmd)
             break;
         }
         {
+            /* Called first, on its own: as an argument beside `detail`, the order in which
+             * the two are evaluated is the compiler's choice, and GCC reads detail first. */
             const char *detail = NULL;
-            respond_detail(core, cmd, core->env.ota(core->env.ctx, cmd, &detail), detail);
+            const app_err_t err = core->env.ota(core->env.ctx, cmd, &detail);
+            respond_detail(core, cmd, err, detail);
         }
         break;
     }
