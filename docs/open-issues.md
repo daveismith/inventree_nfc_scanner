@@ -61,6 +61,9 @@ low = rough edge.
   later `cancel` is answered `no_job`.
 - Fix: mostly server side (see the plugin's list). On the reader, consider answering a `cancel`
   for an unknown id with `ok: true` plus `detail: "no such job"`, so the server can end the job.
+- Update (fleet-updates branch): the plugin now compares `boot` and fails the jobs a restarted
+  reader had taken (`scanner_restarted`), and fails a job unreported past its timeout
+  (`no_result`). The `cancel` answered `no_job` is still not acted on.
 
 ### 5. USB job ids collide with plugin job ids (shared with the plugin)
 
