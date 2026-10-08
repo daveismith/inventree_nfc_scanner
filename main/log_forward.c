@@ -111,4 +111,7 @@ void log_forward_set_level(app_log_level_t level)
     /* "*" resets every tag, including the one the PN532 driver silenced: the I2C driver
      * reports each read the chip refuses, which for this chip is several a second and routine. */
     esp_log_level_set("i2c.master", ESP_LOG_NONE);
+    /* The HTTP client's debug level prints every header it sends, the token among them. */
+    esp_log_level_set("HTTP_CLIENT", ESP_LOG_INFO);
+    esp_log_level_set("esp-tls", ESP_LOG_INFO);
 }

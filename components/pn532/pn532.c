@@ -39,7 +39,7 @@
 /* One activation retry: a second attempt before reporting "no tag" (19 ms rather than 13). */
 #define PASSIVE_ACTIVATION_RETRIES  0x01
 
-#define RSP_MAX     48              /* the longest frame read: two targets from a poll */
+#define RSP_MAX     96              /* the longest frame read: two ISO-DEP targets from a poll, with their ATS */
 
 static const char *TAG = "pn532";
 

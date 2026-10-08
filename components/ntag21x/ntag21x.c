@@ -486,7 +486,7 @@ ntag_err_t ntag_wipe(ntag_t *t, const uint8_t *pwd, void (*on_writing)(void *ctx
         }
     }
 
-    if (st.auth0 != NTAG_AUTH0_OFF && st.cfg_locked) {
+    if (st.is_protected && st.cfg_locked) {
         return NTAG_ERR_LOCKED;         /* the password could never be removed: write nothing */
     }
 

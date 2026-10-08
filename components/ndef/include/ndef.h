@@ -24,6 +24,7 @@ typedef struct {
     bool has_text;
     char text[NDEF_TEXT_MAX + 1];   /* first UTF-8 Text record, NUL terminated */
     bool has_uri;
+    bool rejected;              /* a Text or URI record was there but not usable (not UTF-8) */
     char uri[NDEF_URI_MAX + 1];     /* first URI record, prefix code expanded */
 } ndef_info_t;
 

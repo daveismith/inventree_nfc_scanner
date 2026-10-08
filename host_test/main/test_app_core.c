@@ -87,6 +87,14 @@ static app_err_t env_ota(void *ctx, const app_cmd_t *cmd, const char **detail)
     return APP_ERR_NONE;
 }
 
+static bool s_updating;
+
+static bool env_updating(void *ctx)
+{
+    (void)ctx;
+    return s_updating;
+}
+
 static uint32_t env_now(void *ctx)
 {
     (void)ctx;
@@ -737,6 +745,15 @@ static void test_net_and_ota_commands(void)
     forget();
     cmd("{\"cmd\":\"net\",\"action\":\"forget\",\"ssid\":\"other\"}");
     ASSERT_LINE(0, "{\"rsp\":\"net\",\"ok\":false,\"error\":\"bad_arg\",\"detail\":\"no such network\"}");
+
+    /* No job begins while an update is being written. */
+    s_core.env.updating = env_updating;
+    s_updating = true;
+    forget();
+    program("");
+    ASSERT_LINE(0, "{\"rsp\":\"program\",\"ok\":false,\"id\":7,\"error\":\"busy\",\"detail\":\"a firmware update is in progress\"}");
+    TEST_ASSERT_FALSE(app_core_wants_tag(&s_core));
+    s_updating = false;
 
     /* An update is accepted when the reader is idle, and refused mid-job. */
     forget();

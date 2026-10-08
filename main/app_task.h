@@ -30,6 +30,9 @@ void app_task_start(void);
 /* Where a link's lines go. Before the link sends its first command. */
 void app_task_add_link(uint8_t origin, bool remote, app_link_send_t send, void *ctx);
 
+/* Whether a job is running. From any task; a snapshot. */
+bool app_task_job_active(void);
+
 /* A line already formatted, to one link or (APP_ORIGIN_ALL) every link. From any task. */
 void app_task_send(uint8_t origin, const char *line, size_t len);
 

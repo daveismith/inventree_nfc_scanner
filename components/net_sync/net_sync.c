@@ -36,6 +36,12 @@ void net_sync_new_server(net_sync_t *ns)
     ns->sent_through = 0;
     ns->server_poll_ms = 0;
     ns->last_status = 0;
+    ns->generation++;
+}
+
+uint32_t net_sync_generation(const net_sync_t *ns)
+{
+    return ns->generation;
 }
 
 /* The message's name: "rsp", or the event's name. */
@@ -101,12 +107,13 @@ bool net_sync_queue(net_sync_t *ns, const char *line, size_t len)
     }
     bool keep;
     if (is(name, name_len, "rsp") || is(name, name_len, "waiting") || is(name, name_len, "writing")
-            || is(name, name_len, "done") || is(name, name_len, "failed") || is(name, name_len, "ota")) {
-        keep = true;
+            || is(name, name_len, "done") || is(name, name_len, "failed") || is(name, name_len, "ota")
+            || is(name, name_len, "error")) {
+        keep = true;                    /* `error`: a command of the server's that could not be read */
     } else if (is(name, name_len, "tag")) {
         keep = false;
     } else {
-        return false;                   /* hello, tag_removed, error, log, net: not for the server */
+        return false;                   /* hello, tag_removed, log, net: not for the server */
     }
 
     char seq_field[24];
@@ -177,17 +184,27 @@ size_t net_sync_request(net_sync_t *ns, uint32_t now_ms, bool hold, char *out, s
     if (n < 0 || !put(out, cap, &at, head, (size_t)n)) {
         return 0;
     }
+    /* As many of the queued messages as fit, oldest first; what does not goes next time. */
+    uint32_t carried = ns->sent_through;
     for (uint8_t i = 0; i < ns->count; i++) {
         const net_sync_msg_t *m = slot(ns, i);
-        if ((i > 0 && !put(out, cap, &at, ",", 1)) || !put(out, cap, &at, m->json, m->len)) {
-            return 0;
+        const size_t need = (i > 0 ? 1 : 0) + m->len + 2;      /* comma, message, "]}" */
+        if (at + need >= cap) {
+            break;
+        }
+        if (i > 0) {
+            put(out, cap, &at, ",", 1);
+        }
+        put(out, cap, &at, m->json, m->len);
+        if (m->seq > carried) {
+            carried = m->seq;
         }
     }
     if (!put(out, cap, &at, "]}", 2)) {
         return 0;
     }
     ns->last_started = now_ms;
-    ns->sent_through = ns->last_seq;
+    ns->sent_through = carried;
     ns->ever_called = true;
     return at;
 }
@@ -214,7 +231,8 @@ void net_sync_unreachable(net_sync_t *ns, uint32_t now_ms)
 /* A JSON number as a sequence number: whole, and within what the counters hold. */
 static bool as_seq(const cJSON *item, uint32_t *out)
 {
-    if (!cJSON_IsNumber(item) || item->valuedouble < 0 || item->valuedouble > 2147483647.0) {
+    if (!cJSON_IsNumber(item) || item->valuedouble < 0 || item->valuedouble > 2147483647.0
+            || item->valuedouble != (double)(uint32_t)item->valuedouble) {
         return false;
     }
     *out = (uint32_t)item->valuedouble;
@@ -263,6 +281,9 @@ void net_sync_response(net_sync_t *ns, uint32_t now_ms, int status, const char *
 
     const cJSON *cmds = cJSON_GetObjectItemCaseSensitive(obj, "cmds");
     const cJSON *cmd;
+    if (!cJSON_IsArray(cmds)) {
+        cmds = NULL;                    /* an object would be walked as one; it is not a list */
+    }
     cJSON_ArrayForEach(cmd, cmds) {
         uint32_t seq;
         if (!cJSON_IsObject(cmd) || !as_seq(cJSON_GetObjectItemCaseSensitive(cmd, "seq"), &seq) || seq <= ns->cmd_ack) {

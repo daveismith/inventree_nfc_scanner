@@ -26,6 +26,7 @@ typedef struct {
     bool has_id;
     int32_t id;
     char detail[64];            /* which field, and what was wrong with it */
+    char name[24];              /* an unknown command's name, which `cmd` then points at */
 } proto_err_t;
 
 /*

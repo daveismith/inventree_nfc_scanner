@@ -191,6 +191,10 @@ static void test_text_and_uri_must_be_utf8(void)
     TEST_ASSERT_TRUE(ndef_parse_message(bad, n, &info));
     TEST_ASSERT_FALSE(info.has_text);
 
+    /* A message whose text the device would not read is not one it will write. */
+    TEST_ASSERT_TRUE(ndef_message_valid(msg, n));
+    TEST_ASSERT_FALSE(ndef_message_valid(bad, n));
+
     /* Two-byte UTF-8 in the text is fine. */
     const size_t m = make_inventree_ndef(msg, sizeof(msg), "h/1", "INV-SL1\xC3\xA9");
     TEST_ASSERT_TRUE(ndef_parse_message(msg, m, &info));

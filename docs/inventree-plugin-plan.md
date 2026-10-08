@@ -310,7 +310,7 @@ the `/sync` contract in the network transport plan is the thing they agree on.
 
 ## To decide
 
-Settled: the target is InvenTree 1.4.3, the installation on `inventree.davidiansmith.ca`.
+Settled: the target is InvenTree 1.4.3, the installation on `inventree.example`.
 
 1. **A token per scanner or one shared "scanners" user?** Assumed one user per scanner,
    so a lost unit can be revoked alone.

@@ -157,7 +157,8 @@ typedef struct {
     uint32_t poll_ms;
     uint32_t wait_s;
     uint32_t queued;            /* messages waiting for the server to acknowledge */
-    uint32_t dropped;           /* taps dropped because the queue was full */
+    uint32_t dropped;           /* messages lost: taps pushed out for room, results pushed out when the queue held
+                                   nothing else, anything too long for a slot, and commands too long for a line */
 } app_net_status_t;
 
 /* What `info` reports that the state machine does not itself know. */

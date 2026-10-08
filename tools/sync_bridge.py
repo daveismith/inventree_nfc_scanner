@@ -8,7 +8,7 @@ be exercised with a scanner that has no radio, or whose radio is off, and is the
 client the firmware's `net_sync` follows. Commands the firmware refuses from its network link
 (`bootloader`, `debug`, `net`, `hid`) are refused here too.
 
-    sync_bridge.py --url http://inventree.localhost:8080/plugin/nfcscanner --token <api token>
+    sync_bridge.py --url http://inventree.localhost:8080/plugin/nfcscanner      (asks for the token)
 
 The reader id defaults to the scanner's own (from its USB serial number, which is its MAC),
 and must match a machine configured in InvenTree. The token must belong to that machine's
@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, __import__('os').path.dirname(__import__('os').path.abspath(__file__)))
-from nfcprog import APP_PID, ESPRESSIF_VID, Device, redacted  # noqa: E402
+from nfcprog import APP_PID, ESPRESSIF_VID, Device, ask_secret, redacted  # noqa: E402
 
 POLL_MIN_S = 1.0        # never call more often than this when idle, whatever the server does
 BACKOFF_MAX_S = 30.0
@@ -33,10 +33,12 @@ BACKOFF_MAX_S = 30.0
 def find_scanner():
     import serial.tools.list_ports
 
-    for p in serial.tools.list_ports.comports():
-        if p.vid == ESPRESSIF_VID and p.pid == APP_PID:
-            return p.device, (p.serial_number or '').lower()
-    sys.exit(f'no scanner found at {ESPRESSIF_VID:04x}:{APP_PID:04x}')
+    found = [p for p in serial.tools.list_ports.comports() if p.vid == ESPRESSIF_VID and p.pid == APP_PID]
+    if not found:
+        sys.exit(f'no scanner found at {ESPRESSIF_VID:04x}:{APP_PID:04x}')
+    if len(found) > 1:
+        sys.exit('more than one scanner is connected; pass --port: ' + ', '.join(p.device for p in found))
+    return found[0].device, (found[0].serial_number or '').lower()
 
 
 class Bridge:
@@ -147,12 +149,13 @@ class Bridge:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--url', required=True, help="the plugin's URL, e.g. https://host/plugin/nfcscanner")
-    ap.add_argument('--token', required=True, help="an InvenTree API token of the scanner machine's user")
+    ap.add_argument('--token', help="an InvenTree API token of the scanner machine's user (prompted for if omitted)")
     ap.add_argument('--reader', help='reader id to present (default: nfc-<mac> from the scanner)')
     ap.add_argument('--port', help='serial port; found by USB ID when omitted')
     ap.add_argument('--wait', type=int, default=25, help='long-poll hold to ask for, seconds (0: plain polling)')
     ap.add_argument('-v', '--verbose', action='store_true')
     args = ap.parse_args()
+    token = args.token or ask_secret('API token: ')
 
     port, serial_number = (args.port, '') if args.port else find_scanner()
     reader = args.reader or (f'nfc-{serial_number}' if serial_number else None)
@@ -164,7 +167,7 @@ def main():
         info = dev.request({'cmd': 'info'})
         print('scanner:', json.dumps({k: info.get(k) for k in ('fw', 'pn532', 'state', 'hid')}), flush=True)
         dev.request({'cmd': 'hid', 'enabled': False}).get('ok')   # the plugin drives it now
-        Bridge(dev, args.url, args.token, reader, args.wait, args.verbose).run()
+        Bridge(dev, args.url, token, reader, args.wait, args.verbose).run()
     except KeyboardInterrupt:
         pass
     finally:

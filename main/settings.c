@@ -94,9 +94,27 @@ void settings_net_load(settings_net_t *out)
     nvs_get_blob(nvs, KEY_NET, NULL, &len);  /* the stored size, if any */
     const size_t stored_len = len;
     len = sizeof(stored);
-    if (stored_len > 0 && stored_len <= sizeof(stored) && nvs_get_blob(nvs, KEY_NET, &stored, &len) == ESP_OK && len == sizeof(stored)
+    bool loaded = false;
+    if (stored_len == sizeof(stored) && nvs_get_blob(nvs, KEY_NET, &stored, &len) == ESP_OK
             && stored.version == SETTINGS_NET_VERSION && stored.size == sizeof(stored)) {
+        loaded = true;
+    } else if (stored_len == SETTINGS_NET_V0_SIZE) {
+        /* The first network firmware's layout: the same fields without the header. A unit
+         * updated over the air from it must keep its network, or it would be out of reach. */
+        uint8_t raw[SETTINGS_NET_V0_SIZE];
+        len = sizeof(raw);
+        if (nvs_get_blob(nvs, KEY_NET, raw, &len) == ESP_OK) {
+            memset(&stored, 0, sizeof(stored));
+            memcpy((uint8_t *)&stored + SETTINGS_NET_HEADER, raw, sizeof(raw));
+            loaded = true;
+            ESP_LOGW(TAG, "network settings from the previous layout: kept");
+        }
+        memset(raw, 0, sizeof(raw));
+    }
+    if (loaded) {
         *out = stored;
+        out->version = SETTINGS_NET_VERSION;
+        out->size = sizeof(*out);
         /* Whatever was stored, the strings end. */
         out->url[APP_NET_URL_MAX] = '\0';
         out->token[APP_NET_TOKEN_MAX] = '\0';
@@ -116,6 +134,7 @@ void settings_net_load(settings_net_t *out)
     } else if (stored_len > 0) {
         ESP_LOGW(TAG, "stored network settings are from another firmware layout; starting from defaults");
     }
+    memset(&stored, 0, sizeof(stored));
     nvs_close(nvs);
 }
 

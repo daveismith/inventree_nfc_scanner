@@ -182,12 +182,15 @@ def enter_download_mode():
     recovers a board left in download mode by an interrupted flash. Raises NoBoard when there
     is neither an app nor a download-mode port to work with.
     """
-    already = _find_flashable_port()
+    app_port = _find_app_port()
+    # A board already in download mode (an interrupted flash) can only be told by its serial
+    # number, which is this board's when no scanner is running alongside; with a scanner
+    # present, the scanner is the board, and any lone ROM port is somebody else's.
+    already = None if app_port else _find_flashable_port()
     if already:
-        _note(f'Board is already reachable on {already.device} ({FLASHABLE_PIDS[already.pid]})')
+        _note(f'A board is in download mode on {already.device} (serial {_serial_of(already) or "unknown"}); using it')
         return already
 
-    app_port = _find_app_port()
     if not app_port:
         raise NoBoard(
             f'No board at {ESPRESSIF_VID:04x}:{APP_PID:04x} and none in download mode. '
@@ -231,11 +234,12 @@ def leave_download_mode():
     esptool's ESP32-S3 hard reset clears the sticky FORCE_DOWNLOAD_BOOT bit, so any command
     that ends in one will do; reading the chip id is the cheapest.
     """
+    app = _find_app_port()
+    if app:
+        _note('The board is already running the app')
+        return app
     found = _find_flashable_port()
     if not found:
-        if _find_app_port():
-            _note('The board is already running the app')
-            return _find_app_port()
         raise NoBoard('No board in download mode')
     subprocess.run(
         [sys.executable, '-m', 'esptool', '--chip', 'esp32s3', '-p', found.device, '--after', 'hard-reset', 'chip-id'],

@@ -60,6 +60,16 @@ def redacted(obj):
     return {k: ('***' if k in SECRET_FIELDS and v else v) for k, v in obj.items()}
 
 
+def ask_secret(prompt):
+    """A secret typed at the terminal, never echoed; with no terminal, say so and stop."""
+    if not sys.stdin.isatty():
+        sys.exit(f'{prompt.strip()} needed, and there is no terminal to ask at; pass it as an option')
+    try:
+        return getpass.getpass(prompt)
+    except (EOFError, KeyboardInterrupt):
+        sys.exit('no secret given')
+
+
 def find_port():
     import serial.tools.list_ports
 
@@ -276,16 +286,18 @@ def main():
             if a == 'join':
                 # Prompted rather than taken on the command line, where it would sit in the shell
                 # history and in `ps` output.
-                psk = args.psk if args.psk is not None else getpass.getpass('Passphrase (empty for an open network): ')
+                psk = args.psk if args.psk is not None else ask_secret('Passphrase (empty for an open network): ')
                 cmd.update(action='join', ssid=args.ssid, psk=psk)
             elif a == 'forget':
                 cmd.update(action='forget', ssid=args.ssid)
             elif a == 'server':
                 cmd.update(action='server', url=args.url)
+                if args.token and args.no_token:
+                    sys.exit('--token and --no-token together make no sense')
                 if args.token:
                     cmd['token'] = args.token
                 elif not args.no_token:
-                    cmd['token'] = getpass.getpass('API token: ')
+                    cmd['token'] = ask_secret('API token: ')
             elif a == 'poll':
                 cmd['action'] = 'poll'
                 if args.poll_ms is not None:

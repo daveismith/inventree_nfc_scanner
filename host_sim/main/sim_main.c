@@ -132,10 +132,15 @@ static void env_hid_type(void *ctx, const char *text)
     static char line[512];
     size_t at = (size_t)snprintf(line, sizeof(line), "{\"sim\":\"hid\",\"text\":\"");
     for (; *text && at + 8 < sizeof(line); text++) {
-        if (*text == '"' || *text == '\\') {
+        const unsigned char c = (unsigned char)*text;
+        if (c == '"' || c == '\\') {
             line[at++] = '\\';
+            line[at++] = (char)c;
+        } else if (c < 0x20) {
+            at += (size_t)snprintf(line + at, sizeof(line) - at, "\\u%04x", c);
+        } else {
+            line[at++] = (char)c;
         }
-        line[at++] = *text;
     }
     at += (size_t)snprintf(line + at, sizeof(line) - at, "\"}\n");
     write_all(line, at);

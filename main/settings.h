@@ -15,6 +15,8 @@ typedef struct {
 } settings_network_t;
 
 #define SETTINGS_NET_VERSION    1
+#define SETTINGS_NET_HEADER     4           /* version and size, which the first layout lacked */
+#define SETTINGS_NET_V0_SIZE    (sizeof(settings_net_t) - SETTINGS_NET_HEADER)
 
 /* Everything the network link is configured with. The token is read only by the link. Stored
  * as one blob; `version` and `size` say whether a stored one is this layout. */

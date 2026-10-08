@@ -23,6 +23,8 @@
 #define OTA_STACK       8192
 #define OTA_PRIO        3
 #define OTA_TIMEOUT_MS  30000
+#define JOB_WAIT_MS     (10 * 60 * 1000)        /* a job still waiting for its tag ends by itself before this */
+#define CONFIRM_DEADLINE_S (15 * 60)            /* on trial and still unconfirmed: give the old image its turn */
 
 static const char *TAG = "ota";
 
@@ -57,6 +59,17 @@ static void reader_grace_over(void *arg)
     }
 }
 
+/* An image nobody has reached in all this time is not working as a unit should: the next
+ * boot returns to the previous image, which the bootloader does for an unconfirmed one. */
+static void confirm_deadline(void *arg)
+{
+    (void)arg;
+    if (s_on_trial) {
+        ESP_LOGE(TAG, "unconfirmed after %d s: restarting so the previous firmware returns", CONFIRM_DEADLINE_S);
+        esp_restart();
+    }
+}
+
 void ota_init(void)
 {
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -68,6 +81,11 @@ void ota_init(void)
         const esp_timer_create_args_t args = { .callback = reader_grace_over, .name = "ota_grace" };
         if (esp_timer_create(&args, &t) == ESP_OK) {
             esp_timer_start_once(t, (uint64_t)READER_GRACE_S * 1000000);
+        }
+        esp_timer_handle_t d;
+        const esp_timer_create_args_t dargs = { .callback = confirm_deadline, .name = "ota_deadline" };
+        if (esp_timer_create(&dargs, &d) == ESP_OK) {
+            esp_timer_start_once(d, (uint64_t)CONFIRM_DEADLINE_S * 1000000);
         }
     }
 }
@@ -99,14 +117,25 @@ static void announce(const char *state, const char *detail)
     }
 }
 
-/* The token goes along only to the plugin's own origin: same scheme, host and port. */
-static esp_err_t add_auth(esp_http_client_handle_t client)
+/*
+ * The token goes along only to the plugin's own origin: same scheme, host and port. That is
+ * decided again on every connection, since the updater follows redirects, and a redirect to
+ * another host must not carry it.
+ */
+static esp_err_t on_http_event(esp_http_client_event_t *evt)
 {
-    if (s_plugin_url[0] && s_token[0] && same_origin(s_cmd.ota_url, s_plugin_url)) {
+    if (evt->event_id != HTTP_EVENT_ON_CONNECTED) {
+        return ESP_OK;
+    }
+    char url[APP_OTA_URL_MAX + 1] = { 0 };
+    esp_http_client_get_url(evt->client, url, sizeof(url));
+    if (s_plugin_url[0] && s_token[0] && same_origin(url, s_plugin_url)) {
         char auth[APP_NET_TOKEN_MAX + 8];
         snprintf(auth, sizeof(auth), "Token %s", s_token);
-        esp_http_client_set_header(client, "Authorization", auth);
+        esp_http_client_set_header(evt->client, "Authorization", auth);
         memset(auth, 0, sizeof(auth));
+    } else {
+        esp_http_client_delete_header(evt->client, "Authorization");
     }
     return ESP_OK;
 }
@@ -150,10 +179,10 @@ static void ota_task(void *arg)
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
         .buffer_size = 4096,
+        .event_handler = on_http_event,
     };
     esp_https_ota_config_t cfg = {
         .http_config = &http,
-        .http_client_init_cb = add_auth,
     };
     esp_https_ota_handle_t h = NULL;
     esp_err_t err = esp_https_ota_begin(&cfg, &h);
@@ -195,6 +224,11 @@ static void ota_task(void *arg)
         return;
     }
     ESP_LOGI(TAG, "update written (%d bytes); restarting into it", written);
+    /* Not in the middle of a tag write: a job that began before the download started may
+     * still be running. New ones are refused while the download runs. */
+    for (int waited = 0; app_task_job_active() && waited < JOB_WAIT_MS; waited += 250) {
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
     announce("restarting", NULL);
     vTaskDelay(pdMS_TO_TICKS(500));             /* let the lines out */
     esp_restart();

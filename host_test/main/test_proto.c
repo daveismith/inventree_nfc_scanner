@@ -115,8 +115,8 @@ static void test_parse_rejects_malformed_lines(void)
     assert_rejected("[1,2]", APP_ERR_BAD_JSON, NULL);
     assert_rejected("{}", APP_ERR_BAD_JSON, NULL);
     assert_rejected("{\"cmd\":7}", APP_ERR_BAD_JSON, NULL);
-    assert_rejected("{\"cmd\":\"reboot\"}", APP_ERR_UNKNOWN_CMD, NULL);
-    assert_rejected("{\"cmd\":\"INFO\"}", APP_ERR_UNKNOWN_CMD, NULL);
+    assert_rejected("{\"cmd\":\"reboot\"}", APP_ERR_UNKNOWN_CMD, "reboot");
+    assert_rejected("{\"cmd\":\"INFO\"}", APP_ERR_UNKNOWN_CMD, "INFO");
 }
 
 static void test_parse_rejects_bad_arguments(void)
@@ -171,6 +171,14 @@ static void test_parse_echoes_an_id_on_every_command(void)
     TEST_ASSERT_TRUE(parse("{\"cmd\":\"info\"}"));
     TEST_ASSERT_FALSE(s_cmd.has_id);
     assert_rejected("{\"cmd\":\"info\",\"id\":\"x\"}", APP_ERR_BAD_ARG, "info");
+
+    /* An unknown command is answered by its name, with its id, so the sender can match it. */
+    assert_rejected("{\"cmd\":\"fly\",\"id\":9}", APP_ERR_UNKNOWN_CMD, "fly");
+    TEST_ASSERT_TRUE(s_err.has_id);
+    TEST_ASSERT_EQUAL(9, s_err.id);
+    app_evt_t evt;
+    proto_err_event(&s_err, &evt);
+    TEST_ASSERT_EQUAL_STRING("{\"rsp\":\"fly\",\"ok\":false,\"id\":9,\"error\":\"unknown_cmd\"}", format(&evt));
 
     /* The parser recurses; nesting is capped well within a task's stack. */
     assert_rejected("{\"cmd\":\"info\",\"x\":[[[[[[[[[[[[1]]]]]]]]]]]]}", APP_ERR_BAD_JSON, NULL);
@@ -284,7 +292,7 @@ static void test_parse_errors_become_lines(void)
 
     TEST_ASSERT_FALSE(parse("{\"cmd\":\"nope\"}"));
     proto_err_event(&s_err, &evt);
-    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"error\",\"error\":\"unknown_cmd\"}", format(&evt));
+    TEST_ASSERT_EQUAL_STRING("{\"rsp\":\"nope\",\"ok\":false,\"error\":\"unknown_cmd\"}", format(&evt));
 }
 
 static void test_format_job_events(void)

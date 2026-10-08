@@ -187,8 +187,8 @@ static long dechunk(char *body, size_t len)
         char *end;
         const unsigned long size = strtoul(body + in, &end, 16);
         const char *crlf = strstr(end, "\r\n");
-        if (crlf == NULL) {
-            return -1;
+        if (crlf == NULL || end == body + in || size > len) {
+            return -1;                  /* no size, or one no body of this length could hold */
         }
         in = (size_t)(crlf - body) + 2;
         if (size == 0) {
@@ -231,23 +231,27 @@ static void handle_response(void)
     net_sync_response(&s_ns, now_ms(), status, body, (size_t)body_len, on_cmd, NULL);
 }
 
-/* With Content-Length, the body is complete before the server closes. */
+/* Whether the whole answer is in: a Content-Length reached, or a chunked body's last chunk
+ * seen. Otherwise the server's close ends it. */
 static bool response_complete(void)
 {
     s_in[s_in_len] = '\0';
-    const char *body = strstr(s_in, "\r\n\r\n");
+    char *body = strstr(s_in, "\r\n\r\n");
     if (body == NULL) {
         return false;
     }
-    const char *cl = strstr(s_in, "\nContent-Length:");
-    if (cl == NULL || cl > body) {
-        cl = strstr(s_in, "\ncontent-length:");
+    *body = '\0';                        /* headers end here for header_value; put back below */
+    const char *cl = header_value(s_in, "Content-Length");
+    const char *te = header_value(s_in, "Transfer-Encoding");
+    bool done = false;
+    if (te && strncasecmp(te, "chunked", 7) == 0) {
+        done = strstr(body + 4, "\r\n0\r\n") != NULL;
+    } else if (cl) {
+        const long want = atol(cl);
+        done = want >= 0 && s_in_len - (size_t)(body + 4 - s_in) >= (size_t)want;
     }
-    if (cl == NULL || cl > body) {
-        return false;
-    }
-    const long want = atol(cl + 16);
-    return want >= 0 && s_in_len - (size_t)(body + 4 - s_in) >= (size_t)want;
+    *body = '\r';
+    return done;
 }
 
 static void step_request(void)

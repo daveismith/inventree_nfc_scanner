@@ -58,6 +58,7 @@ static void connect_now(void)
     cfg.sta.threshold.authmode = s_networks[i].psk[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     cfg.sta.pmf_cfg.capable = true;
     esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    memset(&cfg, 0, sizeof(cfg));       /* the passphrase: the driver has its own copy */
     set_state(WIFI_STA_CONNECTING);
     ESP_LOGI(TAG, "joining \"%s\"", s_networks[i].ssid);
     esp_wifi_connect();
@@ -99,7 +100,9 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *d = data;
-        if (s_enabled) {
+        /* A disconnect from a stop that was already asked for, or one arriving while a
+         * fresh join is under way, is not a failure of anything. */
+        if (s_enabled && s_state != WIFI_STA_OFF && !(s_state == WIFI_STA_CONNECTING && esp_timer_is_active(s_retry))) {
             if (s_state == WIFI_STA_CONNECTED) {
                 ESP_LOGW(TAG, "link lost (reason %u)", d->reason);
                 wifi_policy_link_lost(&s_policy, now_ms());
@@ -111,7 +114,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             set_state(WIFI_STA_CONNECTING);
             schedule();
         }
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP && s_enabled) {
         const ip_event_got_ip_t *e = data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
         s_last_joined = wifi_policy_next(&s_policy);

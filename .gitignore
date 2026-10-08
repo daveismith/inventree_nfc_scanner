@@ -11,6 +11,8 @@
 *.log
 **/build/
 build/
+build-*/
+build_*/
 *.o
 *.a
 *.out

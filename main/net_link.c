@@ -35,6 +35,7 @@
 static const char *TAG = "net";
 
 static SemaphoreHandle_t s_lock;        /* s_ns, s_cfg, s_wifi */
+static SemaphoreHandle_t s_dispatch;    /* one answer is applied and its commands handed on at a time, in order */
 static net_sync_t s_ns;
 static settings_net_t s_cfg;
 static char s_reader[NET_SYNC_READER_MAX];
@@ -167,10 +168,12 @@ static bool on_cmd(void *ctx, const char *json, size_t len)
     return true;
 }
 
-/* One call. Returns the HTTP status, or -1 when the server was not reached. */
-static int do_call(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, size_t *resp_len)
+/* One attempt at a call. Returns the HTTP status, or -1 when the server was not reached;
+ * *fresh says whether the attempt began on a new connection. */
+static int do_call_once(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, size_t *resp_len, bool *fresh)
 {
     *resp_len = 0;
+    *fresh = h->client == NULL;
     if (h->client == NULL) {
         esp_http_client_config_t cfg = {
             .url = s_sync_url,
@@ -226,7 +229,13 @@ static int do_call(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, size_t *
             }
             at += (size_t)n;
             if (at >= sizeof(h->resp) - 1) {
-                break;              /* longer than anything the plugin sends; what fits is parsed */
+                /* Longer than anything the plugin sends. What fits is parsed; the rest would
+                 * sit on the connection and be read as the next answer, so it is dropped. */
+                ESP_LOGW(TAG, "an answer over %u bytes was cut", (unsigned)sizeof(h->resp));
+                esp_http_client_close(h->client);
+                esp_http_client_cleanup(h->client);
+                h->client = NULL;
+                break;
             }
         }
         h->resp[at] = '\0';
@@ -242,19 +251,36 @@ static int do_call(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, size_t *
     return status;
 }
 
+/* One call. A connection kept from the last call may have been closed by the server or a
+ * proxy meanwhile; that failure is tried again at once on a fresh one, and only a fresh
+ * connection's failure means the server is out of reach. */
+static int do_call(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, size_t *resp_len)
+{
+    bool fresh;
+    int status = do_call_once(h, body_len, timeout_ms, resp_len, &fresh);
+    if (status < 0 && !fresh) {
+        ESP_LOGI(TAG, "the kept connection was gone; connecting again");
+        status = do_call_once(h, body_len, timeout_ms, resp_len, &fresh);
+    }
+    return status;
+}
+
 /* Build, call, apply. `hold` asks for the configured hold. */
 static void exchange(http_ctx_t *h, bool hold)
 {
     lock();
     const size_t body_len = net_sync_request(&s_ns, now_ms(), hold, h->body, sizeof(h->body));
     const uint32_t wait_s = hold ? s_cfg.wait_s : 0;
+    const uint32_t generation = net_sync_generation(&s_ns);
+    if (h == &s_poll_http) {
+        s_holding = hold;           /* under the lock, so link_send cannot see it stale */
+    }
     unlock();
     if (body_len == 0) {
-        ESP_LOGE(TAG, "the request did not fit");
+        ESP_LOGE(TAG, "the request did not fit");   /* cannot happen: an empty call always fits */
+        s_holding = false;
+        vTaskDelay(pdMS_TO_TICKS(1000));
         return;
-    }
-    if (h == &s_poll_http) {
-        s_holding = hold;
     }
     size_t resp_len;
     const int status = do_call(h, body_len, wait_s * 1000 + HTTP_EXTRA_MS, &resp_len);
@@ -263,7 +289,16 @@ static void exchange(http_ctx_t *h, bool hold)
     }
     cmd_batch_t *batch = h == &s_poll_http ? &s_poll_batch : &s_report_batch;
     batch->count = 0;
+    /* Applied and handed on one answer at a time, so commands reach the app task in the
+     * order the server numbered them even when both tasks have an answer. */
+    xSemaphoreTake(s_dispatch, portMAX_DELAY);
     lock();
+    if (net_sync_generation(&s_ns) != generation) {
+        ESP_LOGI(TAG, "an answer from the previous server, dropped");
+        unlock();
+        xSemaphoreGive(s_dispatch);
+        return;
+    }
     if (status < 0) {
         net_sync_unreachable(&s_ns, now_ms());
     } else {
@@ -278,6 +313,7 @@ static void exchange(http_ctx_t *h, bool hold)
     for (int i = 0; i < batch->count; i++) {
         app_task_line(APP_LINK_NET, batch->json[i], strlen(batch->json[i]));
     }
+    xSemaphoreGive(s_dispatch);
     if (status >= 200 && status < 300) {
         ota_note_host_ok();
     }
@@ -346,12 +382,14 @@ static void apply_networks(void)
     }
     wifi_sta_set_networks(nets, s_cfg.preferred);
     wifi_sta_enable(s_cfg.enabled && count > 0);
+    memset(nets, 0, sizeof(nets));      /* the passphrases: the station has its own copy */
 }
 
 void net_link_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
-    configASSERT(s_lock);
+    s_dispatch = xSemaphoreCreateMutex();
+    configASSERT(s_lock && s_dispatch);
 
     uint8_t mac[6] = { 0 };
     esp_efuse_mac_get_default(mac);

@@ -37,6 +37,8 @@ def free_port():
 
 PORT = free_port()
 URL = f'http://127.0.0.1:{PORT}'
+# (chosen once: the simulator is pointed at it; a restart of the fake plugin reuses it, and
+# the harness's token stops a foreign server on it from passing for ours)
 TOKEN = 'inv-test-token'
 READER = 'nfc-sim000000'
 

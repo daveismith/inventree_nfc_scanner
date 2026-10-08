@@ -100,6 +100,7 @@ static void take_uri(const record_t *r, ndef_info_t *out)
     }
     memcpy(out->uri, prefix, prefix_len);
     if (!utf8_valid(r->payload + 1, rest)) {
+        out->rejected = true;
         return;
     }
     memcpy(out->uri + prefix_len, r->payload + 1, rest);
@@ -159,7 +160,11 @@ static void take_text(const record_t *r, ndef_info_t *out)
         return;
     }
     const size_t text_len = r->payload_len - 1 - lang_len;
-    if (text_len > NDEF_TEXT_MAX || !utf8_valid(r->payload + 1 + lang_len, text_len)) {
+    if (text_len > NDEF_TEXT_MAX) {
+        return;
+    }
+    if (!utf8_valid(r->payload + 1 + lang_len, text_len)) {
+        out->rejected = true;
         return;
     }
     memcpy(out->text, r->payload + 1 + lang_len, text_len);
@@ -207,7 +212,8 @@ bool ndef_parse_message(const uint8_t *msg, size_t len, ndef_info_t *out)
 
 bool ndef_message_valid(const uint8_t *msg, size_t len)
 {
-    return len > 0 && ndef_parse_message(msg, len, NULL);
+    ndef_info_t info;
+    return len > 0 && ndef_parse_message(msg, len, &info) && !info.rejected;
 }
 
 bool ndef_message_is_empty(const uint8_t *msg, size_t len)

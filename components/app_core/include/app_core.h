@@ -51,6 +51,8 @@ typedef struct {
      * status for the answer; on failure both may name a detail. */
     app_err_t (*net)(void *ctx, const app_cmd_t *cmd, app_net_status_t *status, const char **detail);
     app_err_t (*ota)(void *ctx, const app_cmd_t *cmd, const char **detail);
+    /* Optional: an update is being fetched, which ends in a restart; no job may begin. */
+    bool (*updating)(void *ctx);
 } app_env_t;
 
 /* A tag as the reader's anticollision saw it. */

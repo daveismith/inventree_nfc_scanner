@@ -388,7 +388,10 @@ bool proto_parse(const char *line, size_t len, app_cmd_t *cmd, proto_err_t *err)
         err->cmd = app_cmd_name(cmd->type);
         ok = parse_id(obj, false, cmd, err) && parse_ota(obj, cmd, err);
     } else {
-        ok = fail(err, APP_ERR_UNKNOWN_CMD, "");
+        /* Answered as a `rsp` under the name given, so the sender can match it up. */
+        snprintf(err->name, sizeof(err->name), "%s", name->valuestring);
+        err->cmd = err->name;
+        ok = parse_id(obj, false, cmd, err) && fail(err, APP_ERR_UNKNOWN_CMD, "");
     }
 
     cJSON_Delete(obj);

@@ -193,6 +193,10 @@ static void cmd_job(app_core_t *core, const app_cmd_t *cmd)
         respond(core, cmd, APP_ERR_BUSY);
         return;
     }
+    if (core->env.updating && core->env.updating(core->env.ctx)) {
+        respond_detail(core, cmd, APP_ERR_BUSY, "a firmware update is in progress");
+        return;
+    }
     core->job = *cmd;
     core->job_active = true;
     core->job_deadline = core->env.now_ms(core->env.ctx) + cmd->timeout_ms;

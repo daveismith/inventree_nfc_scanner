@@ -109,6 +109,11 @@ void app_task_send(uint8_t origin, const char *line, size_t len)
     send_line(origin, line, len);
 }
 
+bool app_task_job_active(void)
+{
+    return s_core.job_active;           /* a word, read from another task: a hint, not a lock */
+}
+
 void app_task_net_changed(void)
 {
     if (s_task) {
@@ -121,7 +126,7 @@ void app_task_net_changed(void)
 static void env_emit(void *ctx, const app_evt_t *evt)
 {
     (void)ctx;
-    static char line[1024];
+    static char line[PROTO_LINE_MAX];   /* a `failed` with escaped text and uri is the longest event */
     send_event(evt, line, sizeof(line));
 }
 
@@ -156,6 +161,12 @@ static app_err_t env_ota(void *ctx, const app_cmd_t *cmd, const char **detail)
 {
     (void)ctx;
     return ota_start(cmd, detail);
+}
+
+static bool env_updating(void *ctx)
+{
+    (void)ctx;
+    return ota_in_progress();
 }
 
 /* The network changed: USB hears about it; the plugin does not need telling. */
@@ -226,6 +237,7 @@ void app_task_init(void)
 #if CONFIG_APP_NET_ENABLE
         .net = env_net,
         .ota = env_ota,
+        .updating = env_updating,
 #endif
     };
     app_core_init(&s_core, &env, false);
@@ -393,6 +405,9 @@ static void app_task(void *arg)
 
         while (xQueueReceive(s_cmds, &cmd, 0) == pdTRUE) {
             app_core_command(&s_core, &cmd);
+            if (cmd.type == APP_CMD_NET) {
+                memset(&cmd, 0, sizeof(cmd));   /* a passphrase or token: not left lying about */
+            }
         }
         app_core_tick(&s_core);
         nfc_step();
@@ -446,6 +461,9 @@ void app_task_line(uint8_t origin, const char *line, size_t len)
     const bool queued = s_task != NULL && xQueueSend(s_cmds, &cmd, pdMS_TO_TICKS(2000)) == pdTRUE;
     if (!queued) {
         reply_error(origin, APP_ERR_BUSY, app_cmd_name(cmd.type), cmd.has_id, cmd.id, NULL);
+    }
+    if (cmd.type == APP_CMD_NET) {
+        memset(&cmd, 0, sizeof(cmd));
     }
     xSemaphoreGive(s_parse_lock);
     if (queued) {

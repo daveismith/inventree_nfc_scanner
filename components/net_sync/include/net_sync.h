@@ -24,7 +24,7 @@ extern "C" {
 
 #define NET_SYNC_PROTO          1
 #define NET_SYNC_READER_MAX     32
-#define NET_SYNC_MSG_MAX        1024    /* one queued message; an `info` answer, or a `failed` carrying escaped text and uri */
+#define NET_SYNC_MSG_MAX        2048    /* one queued message: the protocol's longest line */
 #define NET_SYNC_QUEUE_LEN      12
 #define NET_SYNC_CMD_MAX        2048    /* a command as handed on: the protocol's longest line */
 
@@ -59,6 +59,7 @@ typedef struct {
     uint32_t last_started;              /* when the last call began, ms */
     uint32_t next_at;                   /* when the next may begin, ms */
     uint32_t sent_through;              /* the newest message seq carried by a call so far */
+    uint32_t generation;                /* bumped by net_sync_new_server: an answer from before is not for us */
     bool ever_called;
 
     char cmd_buf[NET_SYNC_CMD_MAX];     /* a command being handed on */
@@ -99,17 +100,24 @@ uint32_t net_sync_delay_ms(const net_sync_t *ns, uint32_t now_ms);
 
 /*
  * Build the body of a call beginning now. `hold` asks for the configured hold (long polling);
- * false asks the server to answer at once, which is right for a call made to report. Returns
- * the body's length, or 0 when it did not fit. Marks the call as started.
+ * false asks the server to answer at once, which is right for a call made to report. The
+ * queue goes oldest first, as much of it as fits `cap`; the rest waits for the next call.
+ * Returns the body's length, or 0 only when not even an empty call fits. Marks the call as
+ * started.
  */
 size_t net_sync_request(net_sync_t *ns, uint32_t now_ms, bool hold, char *out, size_t cap);
+
+/* The value to remember when a call begins; an answer that arrives after it has changed
+ * belongs to a server that is no longer ours, and must not be given to net_sync_response. */
+uint32_t net_sync_generation(const net_sync_t *ns);
 
 /*
  * The server's answer: HTTP `status` and the body. On 200 the acknowledged messages are
  * dropped and each command not yet acted on is handed to `on_cmd`, oldest first (its `seq`
  * is left in; the protocol ignores it). A command too long for the protocol's line is
  * acknowledged and skipped, with `dropped` counting it. Other statuses set the pacing: 401,
- * 403 and 404 are a refusal, the rest a back-off.
+ * 403 and 404 are a refusal, the rest a back-off. `seq` and `ack` must be whole numbers;
+ * `cmds` must be an array.
  */
 void net_sync_response(net_sync_t *ns, uint32_t now_ms, int status, const char *body, size_t len,
                        net_sync_cmd_fn on_cmd, void *ctx);

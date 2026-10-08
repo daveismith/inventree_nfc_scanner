@@ -84,8 +84,9 @@ static void test_what_is_not_for_the_server(void)
     TEST_ASSERT_FALSE(queue("{\"evt\":\"net\",\"enabled\":true}"));
     TEST_ASSERT_FALSE(queue("not json"));
     TEST_ASSERT_TRUE(queue("{\"evt\":\"ota\",\"state\":\"done\"}"));
+    TEST_ASSERT_TRUE(queue("{\"evt\":\"error\",\"error\":\"bad_json\"}"));   /* a command of theirs that could not be read */
     TEST_ASSERT_TRUE(queue("{\"evt\":\"failed\",\"id\":1,\"error\":\"timeout\"}"));
-    TEST_ASSERT_EQUAL(2, s_ns.count);
+    TEST_ASSERT_EQUAL(3, s_ns.count);
 }
 
 static void test_commands_are_acted_on_once_and_acknowledged(void)
@@ -259,9 +260,31 @@ static void test_queue_makes_room_for_what_matters(void)
     TEST_ASSERT_FALSE(queue(big));
     TEST_ASSERT_EQUAL(3, s_ns.dropped);
 
-    /* The body reports what fits in the buffer, or nothing. */
+    /* A body carries as much of the queue as fits, oldest first; the rest goes next time,
+     * and the pacing knows what has not been carried yet. */
+    char part[300];
+    TEST_ASSERT_TRUE(net_sync_request(&s_ns, 1, true, part, sizeof(part)) > 0);
+    TEST_ASSERT_NOT_NULL(strstr(part, "\"seq\":2,"));
+    TEST_ASSERT_NULL(strstr(part, "\"seq\":12,"));
+    TEST_ASSERT_TRUE(s_ns.sent_through < s_ns.last_seq);
+    TEST_ASSERT_TRUE(net_sync_due(&s_ns, 2));              /* more to carry: at once */
     char small[64];
-    TEST_ASSERT_EQUAL(0, net_sync_request(&s_ns, 1, true, small, sizeof(small)));
+    TEST_ASSERT_EQUAL(0, net_sync_request(&s_ns, 1, true, small, sizeof(small)));   /* not even the frame */
+
+    /* An answer from before a server change is not for the new one. */
+    start();
+    const uint32_t before = net_sync_generation(&s_ns);
+    net_sync_new_server(&s_ns);
+    TEST_ASSERT_NOT_EQUAL(before, net_sync_generation(&s_ns));
+
+    /* A list of commands is a list; an object is not one. Fractions are not sequence numbers. */
+    start();
+    request(1, true);
+    answer(2, 200, "{\"ack\":0,\"cmds\":{\"a\":{\"seq\":5,\"cmd\":\"info\"}}}");
+    TEST_ASSERT_EQUAL(0, s_ncmds);
+    answer(3, 200, "{\"ack\":0,\"cmds\":[{\"seq\":5.5,\"cmd\":\"info\"},{\"seq\":6,\"cmd\":\"info\"}]}");
+    TEST_ASSERT_EQUAL(1, s_ncmds);
+    TEST_ASSERT_EQUAL(6, s_ns.cmd_ack);
 }
 
 void run_net_sync_tests(void)

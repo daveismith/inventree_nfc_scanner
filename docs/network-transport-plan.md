@@ -29,7 +29,7 @@ This is an option in two senses:
 | Getting jobs | Long polling, falling back to a poll every second against a server that does not hold the request |
 | Reporting | Events are posted as they happen, not on the next poll |
 | What is sent | The same `cmd`, `rsp` and `evt` objects as on USB, carried in JSON arrays |
-| Credentials | The plugin's URL (`https://inventree.davidiansmith.ca/...` for this installation) and an InvenTree API token, set over USB and kept on the device |
+| Credentials | The plugin's URL (`https://inventree.example/...` for this installation) and an InvenTree API token, set over USB and kept on the device |
 | Setting it up | Over USB, with a new `net` command |
 | Updates | A/B application slots and rollback, with ESP-IDF's `esp_https_ota`, before a unit is installed out of USB reach |
 
@@ -46,12 +46,12 @@ there). There is one endpoint. The reader calls it whenever it has something to 
 interval.
 
 ```
-POST {plugin-url}/sync/          e.g. https://inventree.davidiansmith.ca/plugin/nfcscanner/sync/
+POST {plugin-url}/sync/          e.g. https://inventree.example/plugin/nfcscanner/sync/
 Authorization: Token <inventree-api-token>
 Content-Type: application/json
 
 {
-  "reader": "nfc-34b7da52a084",     who is calling: fixed, from the MAC
+  "reader": "nfc-0123456789ab",     who is calling: fixed, from the MAC
   "boot": 17,                       changes every time the reader restarts
   "proto": 1,
   "ack": 41,                        the highest command seq the reader has acted on
@@ -148,7 +148,7 @@ Run time, kept in NVS, set with the `net` command over USB:
 ```
 > {"cmd":"net"}
 < {"rsp":"net","ok":true,"enabled":true,"wifi":"connected","ssid":"workshop","ip":"192.168.1.57",
-   "url":"https://inventree.example/plugin/nfcscanner","reader":"nfc-34b7da52a084",
+   "url":"https://inventree.example/plugin/nfcscanner","reader":"nfc-0123456789ab",
    "link":"ok","last_status":200,"poll_ms":1000,"wait_s":25,"queued":0,"dropped":0}
 > {"cmd":"net","action":"join","ssid":"workshop","psk":"..."}
 > {"cmd":"net","action":"forget","ssid":"workshop"}
@@ -258,7 +258,7 @@ firmware's `net_sync`. The firmware's network phases can now start against the p
 local instance (`dev/` in the plugin repository), with `fake_plugin.py` still worth having
 for host tests that need no InvenTree.
 
-For this installation the reader will use `https://inventree.davidiansmith.ca/...`. The
+For this installation the reader will use `https://inventree.example/...`. The
 server's certificate must come from a public CA so the reader's bundle accepts it.
 
 ## Risks
@@ -287,7 +287,7 @@ Each has a default the plan above assumes.
 
 Decided on 2026-10-05:
 
-- The reader reaches InvenTree at a configured URL; `inventree.davidiansmith.ca` here.
+- The reader reaches InvenTree at a configured URL; `inventree.example` here.
 - Long polling by default, falling back to a poll a second where the server does not hold.
 - The token is in NVS, which is encrypted (HMAC scheme); see "Credentials and trust".
 - The plugin is written first, by us.
@@ -310,16 +310,16 @@ Built and tested as far as a bench with no Wi-Fi credentials allows.
 | N0 | Done. Commands carry an `origin`; `rsp` and `hello` go to the link that asked, events to every link; a link that closes cancels its own waiting job; `bootloader`, `debug` and `net` from a remote link answer `not_allowed`. The partition table has two application slots and `otadata`; NVS is encrypted (HMAC scheme, eFuse KEY0). Host tests cover the links (`host_test/main/test_app_core.c`). |
 | N1 | Done. `components/net_sync` is the exchange with no network in it, host-tested (`test_net_sync.c`). `tools/fake_plugin.py` stands in for the plugin; `host_sim` speaks `/sync` over a plain socket when `SIM_SYNC_URL` is set; `tools/test_sync.py` runs the phase's exit tests: a job once, nothing lost or doubled with answers dropped at random, a server that goes away and comes back, a reader that restarts, remote refusals, long polling against plain polling. 21 checks. |
 | N2 | Built: `components/wifi_sta` (policy host-tested in `test_wifi_policy.c`), `main/net_link.c` with two HTTP tasks (one polls and may be held, one reports meanwhile), the `net` command and its settings in NVS, `nfcprog.py net ...`, a panel in `webserial.html`. On the board (2026-10-06): the new partition table is in, eFuse KEY0 is burnt with purpose HMAC_UP and read-protected, settings survive a reboot through the encrypted store, the station tries a network that does not exist and gives up when told to forget it, and the plugin URL and token are set. The simulator's link against the plugin's Docker instance runs a job from InvenTree's API to `done` with the barcode linked. What is left needs a network to join. |
-| N3 | Built: https through the certificate bundle, `Authorization: Token`, 401/403/404 stop the link until it is reconfigured, other failures back off up to 30 s. On the board: pending. |
-| N4 | Built: `main/ota.c`, the `ota` command (accepted from either link), rollback on in the bootloader, the new image confirms itself once the reader chip and a host (USB enumerated, or one `/sync` answered) have come up; an optional `sha256` is checked before the image is used. On the board: the command's failure path is exercised (`downloading` then `failed`, `ESP_ERR_HTTP_CONNECT`, with no network); a real update needs Wi-Fi. |
+| N3 | Built: https through the certificate bundle, `Authorization: Token`, 401/403/404 stop the link for a minute at a time until it is reconfigured, other failures back off up to 30 s. On the board: pending. |
+| N4 | Done. `main/ota.c`, the `ota` command (from USB any allowed URL; from the network only the plugin's own origin), rollback on in the bootloader, the new image confirms itself once the reader chip (or 60 s) and a host (USB enumerated, or one `/sync` answered) have come up, and restarts after 15 minutes unconfirmed so the previous image returns; the `sha256` is required and checked before the image is used; the restart waits for a running job. On the board (2026-10-08): a 0.1.1 image served through the plugin's proxy was fetched, booted, confirmed, and survived a reset; a USB flash afterwards returned the board to the first slot. |
 
 Decided on 2026-10-06: NVS encryption with the HMAC scheme (not flash encryption, which
 would change the USB flashing workflow and close download mode in release mode); the
 plugin serves firmware images to the reader's token.
 
 What remains: the plugin side of OTA (an endpoint that holds uploaded firmware and serves
-it to a scanner's token), and the `recovery guard off` headless configuration, which is a
-Kconfig change at install time.
+it to a scanner's token). The recovery guard is off in the default build and on only in
+`sdkconfig.dev`, so a headless unit is the default build.
 
 ### Review fixes (2026-10-07)
 
@@ -330,5 +330,5 @@ use after free in the updater's success path; the recovery guard on in the defau
 cJSON's 1000-level nesting limit against small task stacks; a tight loop when the plugin
 answered without acknowledging; `hid` accepted from the network. Policy settled then: an
 update asked for over the network must come from the plugin's own origin and name its
-digest; the digest is always required; a new server URL drops the stored token unless a new
+digest; the digest is always required; `hid` is refused from the network too; a new server URL drops the stored token unless a new
 one comes with it; a stored `http://` URL leaves the link off in a build that forbids http.

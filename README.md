@@ -4,7 +4,7 @@ A desk NFC reader and programmer for an [InvenTree](https://inventree.org) inven
 tags sit in Gridfinity storage bins; each bin is an InvenTree stock location. The device
 
 - **programs tags** from an InvenTree page over WebSerial. The page holds the InvenTree
-  session and does every API call; the device needs no Wi-Fi, URL or token.
+  session and does every API call; on this route the device needs no Wi-Fi, URL or token.
 - **looks bins up** on its own: tap a tag and it types the tag's barcode (`INV-SL42`, Enter)
   as a USB keyboard, which InvenTree's scan field understands.
 
@@ -42,12 +42,15 @@ enumerates it, and the `debug` command) and plain `http://` plugin URLs, for the
 local Docker instance:
 
 ```sh
-idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
-idf.py flash
+idf.py -B build-dev -DSDKCONFIG=build-dev/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
+idf.py -B build-dev flash
 ```
 
-The `-D` is needed once: it goes into the generated `sdkconfig`, which later builds reuse.
-Pass it to `build`, not to `flash`, where it stops the flash hook from running.
+Keep the two apart, as above: their own build directory and their own `sdkconfig`. Without
+`-DSDKCONFIG` both would share the `sdkconfig` in the repository root, and a plain
+`idf.py build` after a development one would still carry the recovery guard and `http://`.
+Both `-D` options are cached in the build directory, so they are needed once; pass them to
+`build`, not to `flash`, where they stop the flash hook from running.
 
 The firmware owns the board's only USB port, so esptool cannot reset it into the bootloader
 the usual way. `idf_ext.py` handles that: before a flash it sends the running firmware the
@@ -90,11 +93,13 @@ immediate `rsp`; a job's progress follows as `evt` lines.
 | `log` | `level`: `off`, `error`, `warn`, `info`, `debug` |
 | `bootloader` | |
 | `net` | Network builds, USB only. No fields: report. `action`: `join` (`ssid`, `psk`), `forget` (`ssid`), `server` (`url`, `token`), `poll` (`poll_ms`, `wait_s`); `enabled` with or without an action. See docs/network-transport-plan.md |
-| `ota` | Network builds. `url` of a firmware image, optional `sha256`; progress comes as `ota` events and the device restarts into the new image |
+| `ota` | Network builds. `url` of a firmware image and its `sha256`, both required; progress comes as `ota` events and the device restarts into the new image once no job is running. From the network the image must be on the plugin's own server |
 
 A command carries an origin: its `rsp` goes back to the link that sent it (the USB page, or
 the plugin over the network), events go to every link. From the network, `bootloader`,
-`debug` and `net` answer `not_allowed`. Closing the USB port cancels a job it started.
+`debug`, `net` and `hid` answer `not_allowed`. Closing the USB port cancels a job it started.
+A command that cannot be read is answered as a `rsp` under the name given, with
+`unknown_cmd`; a line that is not a command object at all gets an `error` event.
 
 Events: `hello`, `waiting`, `writing`, `done`, `failed`, `tag`, `tag_removed`, `error`, `log`,
 and in network builds `net` (the link changed state) and `ota` (an update's progress).
@@ -177,17 +182,17 @@ the InvenTree plugin over Wi-Fi: it polls the plugin's `/sync/` for jobs and rep
 and can be updated over the network. It stays off the air until told where to go, over USB:
 
 ```sh
-python tools/nfcprog.py net join "workshop" --psk "..."
-python tools/nfcprog.py net server https://inventree.example/plugin/nfcscanner --token inv-...
+python tools/nfcprog.py net join "workshop"        # asks for the passphrase
+python tools/nfcprog.py net server https://inventree.example/plugin/nfcscanner   # asks for the token
 python tools/nfcprog.py net            # what it is doing
 ```
 
 The reader id it presents is `nfc-<mac>`, shown by `net` and `info`; it must match an NFC
 Scanner machine in InvenTree, and the token must belong to that machine's user. Long
 polling is asked for by default (`wait_s` 25) and falls back by itself to a poll a second
-where the server does not hold. `CONFIG_APP_NET_ALLOW_HTTP` (on in `sdkconfig.defaults`,
-for the plugin's local Docker instance) lets `net server` and `ota` take http:// URLs;
-turn it off for a unit in use.
+where the server does not hold. `CONFIG_APP_NET_ALLOW_HTTP` (on in `sdkconfig.dev` only,
+for the plugin's local Docker instance) lets `net server` and `ota` take http:// URLs. A
+build without it refuses them, and leaves a stored http:// URL unused.
 
 The settings partition is encrypted, with keys derived from an eFuse HMAC key that the
 firmware burns itself on the first boot that finds eFuse block KEY0 empty. That burn is
