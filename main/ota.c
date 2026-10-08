@@ -219,8 +219,10 @@ static bool serial_begin(void *ctx, uint32_t size, const char **detail)
 static bool serial_write(void *ctx, const uint8_t *data, size_t len, const char **detail)
 {
     (void)ctx;
-    if (esp_ota_write(s_handle, data, len) != ESP_OK) {
-        *detail = "flash write failed";
+    const esp_err_t err = esp_ota_write(s_handle, data, len);
+    if (err != ESP_OK) {
+        /* The first piece is checked for an image header before anything is written. */
+        *detail = err == ESP_ERR_OTA_VALIDATE_FAILED ? "not a firmware image for this chip" : "flash write failed";
         return false;
     }
     if (psa_hash_update(&s_hash, data, len) != PSA_SUCCESS) {
@@ -239,7 +241,6 @@ static bool serial_finish(void *ctx, const uint8_t sha256[32], const char **deta
         || memcmp(got, sha256, sizeof(got)) != 0) {
         esp_ota_abort(s_handle);
         *detail = "sha256 does not match";
-        ota_announce("failed", *detail);
         return false;
     }
     esp_err_t err = esp_ota_end(s_handle);      /* checks the image itself; frees the handle */
@@ -248,7 +249,6 @@ static bool serial_finish(void *ctx, const uint8_t sha256[32], const char **deta
     }
     if (err != ESP_OK) {
         *detail = err == ESP_ERR_OTA_VALIDATE_FAILED ? "not a valid image for this chip" : esp_err_to_name(err);
-        ota_announce("failed", *detail);
         return false;
     }
     return true;
@@ -301,9 +301,8 @@ app_err_t ota_command(const app_cmd_t *cmd, const char **detail)
         if (xTaskCreate(restart_task, "ota_restart", 3072, NULL, 3, NULL) != pdPASS) {
             ota_restart_when_free();
         }
-    } else if (err != APP_ERR_NONE && was_active && !ota_stream_active(&s_stream)
-               && cmd->type != APP_CMD_OTA_END) {
-        ota_announce("failed", *detail);        /* ota_end's failures announce themselves */
+    } else if (err != APP_ERR_NONE && was_active && !ota_stream_active(&s_stream)) {
+        ota_announce("failed", *detail);        /* the session it ended was this one's */
     }
     return err;
 }
