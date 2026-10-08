@@ -11,6 +11,41 @@ may defer a USB update is a policy the admin sets; managing updates is for admin
 only; images are stored in media; releases are checked automatically and on demand; room is
 left for an admin flashing a scanner through the ROM bootloader from the browser.
 
+## Status (2026-10-08, branch `fleet-updates` in both repositories)
+
+Built and verified, phases 1 to 5:
+
+| Piece | Where | Verified |
+| --- | --- | --- |
+| `version.txt`, `tools/make_release.py`, tag workflow `release.yaml`; CI packages every push | firmware | Locally; the tag workflow has not run yet (no tag pushed) |
+| `fw` in the sync body; `reader` in `hello` and `info` | firmware | Host tests, simulator, the board |
+| `ota_begin` / `ota_data` / `ota_end`, `components/ota_stream`, `nfcprog.py update` | firmware | 85 host tests, 52 simulator checks; the board, 1.2 MB in 25 s |
+| Registry, firmware store, GitHub fetch, deployments, admin and USB API, image endpoint | plugin | `dev/check_fleet.py` (54 checks); `dev/check.py` (46) still passes |
+| Network route | both | The board: deployed, downloaded, restarted and confirmed |
+| USB route | both | The board, through `dev/usb_update.py`, which follows the browser's sequence |
+| Browser: update notice and flow (`scanner.ts`), admin fleet item (`Fleet.tsx`) | plugin | Builds and lints; served, admin-only as intended; **not yet clicked in a browser** |
+
+Changes from the plan as written:
+
+- The image endpoint needs a signed-in user or a token, not none: every client that fetches
+  it has one (the scanner sends its token to its own server, the browser its session), and it
+  keeps the endpoint off the open internet for free.
+- Lost jobs now end (`scanner_restarted` when a scanner calls with a new boot, `no_result` two
+  minutes past a job's timeout). Without it, a stale job blocked an update for ever; it was the
+  plugin's open issue 1.
+- The network route's "did not come back" timeout is 20 minutes, beyond the firmware's own
+  15-minute trial, so a rollback is reported as one.
+- The reader stops polling while an image arrives over USB, which roughly halves the time.
+- An admin can forget a scanner (`DELETE api/fleet/scanners/<reader>/`).
+
+Not done:
+
+- Phase 6 extras: GitHub artifact attestations; the ROM-bootloader flasher in the browser
+  (the merged image and its manifest entry are in place for it).
+- Fetching from the real repository, which is private until it goes public; the fetch is
+  checked against a stand-in for GitHub's API.
+- The first tagged release. Pushing `v0.2.0` after merging would exercise the workflow.
+
 ## What exists today
 
 The firmware has a network OTA path: an `ota` command with a URL and a required sha256; the

@@ -66,6 +66,30 @@ until the next `idf.py flash` or `idf.py app-mode`.
 - `idf.py monitor` shows nothing: logs go to UART0, or over the protocol with
   `tools/nfcprog.py log info`.
 
+### Updating a unit without the bootloader
+
+A unit running this firmware also takes a new image over its own USB link, with no download
+mode: `tools/nfcprog.py update build/inventree_nfc_scanner.bin` (about 25 s for 1.2 MB). The
+image goes into the second application slot, its sha256 is checked, and the unit restarts into
+it on trial, exactly as an update over the network. The InvenTree plugin uses the same commands
+to update a USB scanner from the browser, and the `ota` command to update a network one.
+
+### Releases
+
+The version is the one line in `version.txt`. Pushing a tag `v<that version>` (or
+`v<version>-rc.N` for a pre-release, after setting `version.txt` to match) runs
+`.github/workflows/release.yaml`: it builds the production configuration and publishes a
+GitHub release with the app image, a merged image for flashing a blank board from offset 0,
+and `manifest.json`, which the plugin reads (see `tools/make_release.py`). A tag that does not
+match `version.txt` fails the workflow. CI packages every push the same way without publishing.
+
+```sh
+echo 0.2.0 > version.txt && git commit -am "0.2.0" && git tag v0.2.0 && git push --follow-tags
+```
+
+`tools/make_release.py --dev --build build-dev` packages a development build for uploading to
+the plugin's local Docker instance (it allows plain http); never publish one.
+
 While `CONFIG_APP_DEV_RECOVERY` is on (the default during development), firmware that
 crashes three times running, or that no host enumerates within 20 s of boot, puts itself in
 download mode, so a bad build can be replaced without touching the board. **Turn it off for
@@ -95,10 +119,13 @@ immediate `rsp`; a job's progress follows as `evt` lines.
 | `bootloader` | |
 | `net` | Network builds, USB only. No fields: report. `action`: `join` (`ssid`, `psk`), `forget` (`ssid`), `server` (`url`, `token`), `poll` (`poll_ms`, `wait_s`); `enabled` with or without an action. See docs/network-transport-plan.md |
 | `ota` | Network builds. `url` of a firmware image and its `sha256`, both required; progress comes as `ota` events and the device restarts into the new image once no job is running. From the network the image must be on the plugin's own server |
+| `ota_begin` | USB only, any build. `id`, `size` and `sha256` of an image about to be sent. `busy` mid-job or while another update runs |
+| `ota_data` | `id`, `at` (where the piece goes: where the last one ended) and `data`, base64 of at most 768 bytes. Each is answered; a piece out of order ends the update |
+| `ota_end` | `id`. The image is checked (size, sha256, a valid image for this chip) and the device restarts into it on trial; `verify_failed` otherwise. An update also ends when the port closes or after 30 s with nothing sent |
 
 A command carries an origin: its `rsp` goes back to the link that sent it (the USB page, or
 the plugin over the network), events go to every link. From the network, `bootloader`,
-`debug`, `net` and `hid` answer `not_allowed`. Closing the USB port cancels a job it started.
+`debug`, `net`, `hid` and the three `ota_` commands answer `not_allowed`. Closing the USB port cancels a job it started.
 A command that cannot be read is answered as a `rsp` under the name given, with
 `unknown_cmd`; a line that is not a command object at all gets an `error` event.
 
@@ -107,7 +134,8 @@ the scanner's id (`nfc-` and its MAC address), the same id it uses over the netw
 plugin knows a scanner by it, whether it is plugged in or on Wi-Fi.
 
 Events: `hello`, `waiting`, `writing`, `done`, `failed`, `tag`, `tag_removed`, `error`, `log`,
-and in network builds `net` (the link changed state) and `ota` (an update's progress).
+`ota` (an update's progress: `downloading`, `restarting`, `failed` with `detail`), and in
+network builds `net` (the link changed state).
 
 Errors: `bad_json`, `line_too_long`, `unknown_cmd`, `bad_arg`, `busy`, `no_job`, `timeout`,
 `cancelled`, `wrong_tag_type`, `multiple_tags`, `not_blank`, `auth_required`, `auth_failed`,
@@ -126,13 +154,14 @@ The mapping between lines and structs is `components/proto`; the behaviour is
 
 | | |
 | --- | --- |
-| `tools/nfcprog.py` | The protocol from the command line: `info`, `program --host H --pk N`, `wipe`, `cancel`, `hid on\|off`, `log LEVEL`, `monitor`, `bootloader`, `net ...`, `ota URL --file IMAGE`, `ndef`, `raw`. Needs pyserial. Passphrases and tokens are prompted for unless given as options, and never echoed. With two scanners connected it insists on `--port`. |
+| `tools/nfcprog.py` | The protocol from the command line: `info`, `program --host H --pk N`, `wipe`, `cancel`, `hid on\|off`, `log LEVEL`, `monitor`, `bootloader`, `net ...`, `ota URL --file IMAGE`, `update IMAGE` (over USB), `ndef`, `raw`. Needs pyserial. Passphrases and tokens are prompted for unless given as options, and never echoed. With two scanners connected it insists on `--port`. |
 | `tools/webserial.html` | The same from a browser (Chrome or Edge), standing in for the InvenTree plugin page. |
 | `tools/test_sim.py` | Runs `nfcprog.py` against the host simulator. |
 | `tools/fake_plugin.py` | A stand-in for the InvenTree plugin's `/sync`, with endpoints to queue commands, read what the reader reported, and drop answers at random. |
 | `tools/test_sync.py` | The network link end to end: the host simulator against `fake_plugin.py` (a job once, a lossy link, a server that comes and goes, a reader restart, long polling). |
 | `tools/sync_bridge.py` | Presents a USB scanner to the InvenTree plugin as a network scanner, speaking its `/sync` exchange; the reference client for the network firmware. |
 | `tools/hid_check.py` | Checks keyboard output: turns it on for one session and reads back what a tap types. |
+| `tools/make_release.py` | Packages a build as release assets with its manifest; the release workflow runs it. |
 | `tools/tag_checks.py` | Guided checks with real tags: says which tag to present, sends the jobs, checks the answers. |
 
 ## Tests
@@ -163,10 +192,12 @@ What only real tags can confirm, and the set of tags to prepare for it, is in
 
 ```
 main/                 start-up, the task that owns the reader and its links, download mode,
-                      recovery guard, the network link (net_link.c) and the updater (ota.c)
+                      recovery guard, the network link (net_link.c), and updates: trial and
+                      USB (ota.c), over the network (ota_net.c)
 components/app_core   the state machine: commands, tag events and time in; events out
 components/proto      JSON lines <-> commands and events
 components/net_sync   the exchange with the plugin, with no network in it
+components/ota_stream an image sent over the serial link: order, size, timeout, link loss
 components/wifi_sta   the Wi-Fi station; its join-and-retry policy is plain C
 components/ndef       NDEF parsing and the Type 2 TLV
 components/ntag21x    NTAG213/215/216: read, tear-safe write, verify, password
@@ -177,7 +208,7 @@ host_test/, host_sim/ host builds of everything above the drivers
 idf_ext.py            the flash hook
 ```
 
-`app_core`, `proto`, `ndef`, `ntag21x`, `net_sync` and `wifi_policy` are plain C with no
+`app_core`, `proto`, `ndef`, `ntag21x`, `net_sync`, `ota_stream` and `wifi_policy` are plain C with no
 ESP-IDF in them, which is what lets them run on the host.
 
 ## Network link
