@@ -13,6 +13,8 @@ A tag carries one NDEF message with two records: a URI
 record (`INV-SL<pk>`), InvenTree's short barcode. Tags are write-protected with the NTAG's
 password, never with its permanent lock bits.
 
+Known gaps are listed in [docs/open-issues.md](docs/open-issues.md).
+
 ## Hardware
 
 | Part | Connection |
