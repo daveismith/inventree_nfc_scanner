@@ -18,3 +18,4 @@ void run_proto_tests(void);
 void run_app_core_tests(void);
 void run_net_sync_tests(void);
 void run_wifi_policy_tests(void);
+void run_ota_stream_tests(void);

@@ -21,9 +21,9 @@
 #include "sysinfo.h"
 #include "usb_dev.h"
 
+#include "ota.h"
 #if CONFIG_APP_NET_ENABLE
 #include "net_link.h"
-#include "ota.h"
 #endif
 
 _Static_assert(USB_CDC_LINE_MAX == PROTO_LINE_MAX, "the link and the protocol must agree on a line");
@@ -150,23 +150,23 @@ static void env_sysinfo(void *ctx, app_sysinfo_t *out)
 #endif
 }
 
-#if CONFIG_APP_NET_ENABLE
-static app_err_t env_net(void *ctx, const app_cmd_t *cmd, app_net_status_t *status, const char **detail)
-{
-    (void)ctx;
-    return net_link_command(cmd, status, detail);
-}
-
 static app_err_t env_ota(void *ctx, const app_cmd_t *cmd, const char **detail)
 {
     (void)ctx;
-    return ota_start(cmd, detail);
+    return ota_command(cmd, detail);
 }
 
 static bool env_updating(void *ctx)
 {
     (void)ctx;
     return ota_in_progress();
+}
+
+#if CONFIG_APP_NET_ENABLE
+static app_err_t env_net(void *ctx, const app_cmd_t *cmd, app_net_status_t *status, const char **detail)
+{
+    (void)ctx;
+    return net_link_command(cmd, status, detail);
 }
 
 /* The network changed: USB hears about it; the plugin does not need telling. */
@@ -234,10 +234,10 @@ void app_task_init(void)
         .set_log_level = env_set_log_level,
         .enter_bootloader = env_enter_bootloader,
         .debug = dev_recovery_debug_available() ? env_debug : NULL,
-#if CONFIG_APP_NET_ENABLE
-        .net = env_net,
         .ota = env_ota,
         .updating = env_updating,
+#if CONFIG_APP_NET_ENABLE
+        .net = env_net,
 #endif
     };
     app_core_init(&s_core, &env, false);
@@ -288,9 +288,7 @@ static void nfc_step(void)
         s_nfc_fails = 0;
         sysinfo_set_pn532(true, v.ic, v.ver, v.rev);
         app_core_nfc_state(&s_core, true);
-#if CONFIG_APP_NET_ENABLE
         ota_note_reader_up();
-#endif
         return;
     }
 
@@ -385,6 +383,7 @@ static void app_task(void *arg)
         /* A close and a reopen can both land in one wake-up; in that order they are a new
          * session, which must not inherit the last one's settings. */
         if (notes & NOTE_LINK_DOWN) {
+            ota_link_down(APP_LINK_USB);
             app_core_link(&s_core, APP_LINK_USB, false);
             hello_at = 0;
         }
@@ -410,7 +409,12 @@ static void app_task(void *arg)
             }
         }
         app_core_tick(&s_core);
-        nfc_step();
+        ota_poll();
+        /* While an update arrives the reader rests: no job may start, and each line of the
+         * image is answered sooner without a poll in the way. */
+        if (!ota_in_progress()) {
+            nfc_step();
+        }
     }
 }
 

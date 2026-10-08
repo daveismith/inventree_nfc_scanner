@@ -284,6 +284,53 @@ def run(pty):
     check(events(out, 'tag')[0].get('text') == 'INV-SL42' and not [o for o in out if o.get('sim') == 'hid'],
           'with hid off, the tap is reported and not typed')
 
+    # --- a firmware over USB
+    import base64
+    import hashlib
+    import tempfile
+
+    image = b'fw=0.3.0-sim\n' + os.urandom(5000)
+    with tempfile.NamedTemporaryFile(suffix='.bin', delete=False) as f:
+        f.write(image)
+    try:
+        code, out = nfcprog(pty, 'update', f.name)
+    finally:
+        os.unlink(f.name)
+    ota = [o.get('state') for o in events(out, 'ota')]
+    check(code == 0 and ota == ['downloading', 'restarting'], f'an image sent over USB is taken and restarted into ({ota})')
+    code, out = nfcprog(pty, 'info')
+    check(out[-1].get('fw') == '0.3.0-sim', 'and the simulator then runs it')
+
+    link = Link(pty)
+    digest = hashlib.sha256(image).hexdigest()
+    link.send(json.dumps({'cmd': 'ota_begin', 'id': 9, 'size': len(image), 'sha256': '00' * 32}))
+    link.read(0.2)
+    for at in range(0, len(image), 768):
+        link.send(json.dumps({'cmd': 'ota_data', 'id': 9, 'at': at, 'data': base64.b64encode(image[at:at + 768]).decode()}))
+        link.read(0.05)
+    link.send('{"cmd":"ota_end","id":9}')
+    out = link.read(0.5)
+    check({'rsp': 'ota_end', 'ok': False, 'id': 9, 'error': 'verify_failed', 'detail': 'sha256 does not match'} in out
+          and {'evt': 'ota', 'state': 'failed', 'detail': 'sha256 does not match'} in out,
+          'an image that is not the one named is refused, and nothing restarts')
+
+    link.send(json.dumps({'cmd': 'ota_begin', 'id': 10, 'size': len(image), 'sha256': digest}))
+    link.read(0.2)
+    link.send(json.dumps({'cmd': 'program', 'id': 11, 'ndef': 'D101035400656E'}))
+    out = link.read(0.3)
+    check({'rsp': 'program', 'ok': False, 'id': 11, 'error': 'busy', 'detail': 'a firmware update is in progress'} in out,
+          'no job begins while an image is arriving')
+    link.send(json.dumps({'cmd': 'ota_data', 'id': 10, 'at': 768, 'data': base64.b64encode(image[:768]).decode()}))
+    out = link.read(0.3)
+    check({'rsp': 'ota_data', 'ok': False, 'id': 10, 'error': 'bad_arg', 'detail': 'at: expected 0'} in out,
+          'a piece out of order ends the update')
+    link.send('{"cmd":"ota_end","id":10}')
+    out = link.read(0.3)
+    check(out and out[0].get('error') == 'no_job', 'and nothing is left of it')
+    link.close()
+    code, out = nfcprog(pty, 'info')
+    check(out[-1].get('fw') == '0.3.0-sim' and out[-1].get('state') == 'idle', 'the firmware is unchanged by the failures')
+
     # --- bootloader
     code, out = nfcprog(pty, 'bootloader')
     check(code == 0 and out[-1] == {'rsp': 'bootloader', 'ok': True}, 'bootloader acknowledged')

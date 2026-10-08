@@ -35,6 +35,7 @@ extern "C" {
 #define APP_NET_URL_MAX         160
 #define APP_NET_TOKEN_MAX       96
 #define APP_OTA_URL_MAX         256
+#define APP_OTA_CHUNK_MAX       768         /* bytes of image per ota_data line: 1024 base64 characters */
 
 typedef enum {
     APP_ERR_NONE = 0,
@@ -71,6 +72,9 @@ typedef enum {
     APP_CMD_DEBUG,              /* development builds only: provoke a failure on purpose */
     APP_CMD_NET,                /* network builds only: the Wi-Fi and plugin settings */
     APP_CMD_OTA,                /* network builds only: fetch and install a new firmware */
+    APP_CMD_OTA_BEGIN,          /* USB only: a new firmware is about to be sent over the serial link */
+    APP_CMD_OTA_DATA,           /* USB only: a piece of it */
+    APP_CMD_OTA_END,            /* USB only: that was all; check it and restart into it */
 } app_cmd_type_t;
 
 typedef enum {
@@ -102,7 +106,7 @@ typedef struct {
     bool has_id;
     int32_t id;
 
-    /* program, wipe */
+    /* program, wipe; and ota_data, whose bytes travel here too */
     uint16_t ndef_len;
     uint8_t ndef[APP_NDEF_MAX];
     bool overwrite;
@@ -139,7 +143,9 @@ typedef struct {
     /* ota */
     char ota_url[APP_OTA_URL_MAX + 1];
     bool has_sha256;
-    uint8_t sha256[32];
+    uint8_t sha256[32];             /* ota, ota_begin */
+    uint32_t ota_size;              /* ota_begin: the image's length */
+    uint32_t ota_at;                /* ota_data: where its bytes go */
 } app_cmd_t;
 
 /* The network side as `net` and `info` report it. Strings live as long as the firmware runs. */
