@@ -234,7 +234,7 @@ esp_err_t pn532_poll(pn532_target_t *target)
 
     /* Up to two targets at 106 kbps type A: asking for two is how a second tag is noticed. */
     const uint8_t params[] = { 0x02, 0x00 };
-    uint8_t rsp[32];
+    uint8_t rsp[RSP_MAX - 10];          /* two ISO-DEP targets, ATS included, fit; command() adds the frame */
     size_t n = 0;
     const esp_err_t err = command(CMD_IN_LIST_PASSIVE_TARGET, params, sizeof(params), rsp, sizeof(rsp), &n, POLL_TIMEOUT_MS);
     if (err != ESP_OK) {

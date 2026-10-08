@@ -49,8 +49,7 @@ idf.py -B build-dev flash
 Keep the two apart, as above: their own build directory and their own `sdkconfig`. Without
 `-DSDKCONFIG` both would share the `sdkconfig` in the repository root, and a plain
 `idf.py build` after a development one would still carry the recovery guard and `http://`.
-Both `-D` options are cached in the build directory, so they are needed once; pass them to
-`build`, not to `flash`, where they stop the flash hook from running.
+Both `-D` options are cached in the build directory, so they are needed once, on `build`.
 
 The firmware owns the board's only USB port, so esptool cannot reset it into the bootloader
 the usual way. `idf_ext.py` handles that: before a flash it sends the running firmware the
@@ -121,7 +120,7 @@ The mapping between lines and structs is `components/proto`; the behaviour is
 
 | | |
 | --- | --- |
-| `tools/nfcprog.py` | The protocol from the command line: `info`, `program --host H --pk N`, `wipe`, `cancel`, `hid on\|off`, `log LEVEL`, `monitor`, `bootloader`, `net ...`, `ota URL --file IMAGE`, `ndef`, `raw`. Needs pyserial. Passphrases and tokens are prompted for, not taken on the command line, and never echoed. With two scanners connected it insists on `--port`. |
+| `tools/nfcprog.py` | The protocol from the command line: `info`, `program --host H --pk N`, `wipe`, `cancel`, `hid on\|off`, `log LEVEL`, `monitor`, `bootloader`, `net ...`, `ota URL --file IMAGE`, `ndef`, `raw`. Needs pyserial. Passphrases and tokens are prompted for unless given as options, and never echoed. With two scanners connected it insists on `--port`. |
 | `tools/webserial.html` | The same from a browser (Chrome or Edge), standing in for the InvenTree plugin page. |
 | `tools/test_sim.py` | Runs `nfcprog.py` against the host simulator. |
 | `tools/fake_plugin.py` | A stand-in for the InvenTree plugin's `/sync`, with endpoints to queue commands, read what the reader reported, and drop answers at random. |

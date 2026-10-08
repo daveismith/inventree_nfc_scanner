@@ -475,6 +475,11 @@ static void test_wipe(void)
     assert_tag_holds(NULL, 0);
 }
 
+static void count_writing(void *ctx)
+{
+    (*(int *)ctx)++;
+}
+
 static void test_config_lock_is_respected(void)
 {
     fresh(NTAG_215);
@@ -483,6 +488,14 @@ static void test_config_lock_is_respected(void)
     TEST_ASSERT_EQUAL(NTAG_ERR_LOCKED, ntag_program(&s_tag, &p, NULL, NULL));
     TEST_ASSERT_EQUAL_HEX8(0xFF, sim_ntag_page(&s_sim, 0x83)[3]);
     /* the message itself went on; it is the protection that could not */
+    assert_tag_holds(s_msg, s_msg_len);
+
+    /* A wipe of a tag whose AUTH0 is set but locked could not finish: it writes nothing,
+     * whether or not that AUTH0 happens to protect anything. */
+    sim_ntag_page(&s_sim, 0x83)[3] = 0xF0;       /* AUTH0 past the end: not protected */
+    int writing_calls = 0;
+    TEST_ASSERT_EQUAL(NTAG_ERR_LOCKED, ntag_wipe(&s_tag, NULL, count_writing, &writing_calls));
+    TEST_ASSERT_EQUAL(0, writing_calls);
     assert_tag_holds(s_msg, s_msg_len);
 }
 

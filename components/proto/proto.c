@@ -125,7 +125,7 @@ static bool parse_program(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
         return fail(err, APP_ERR_BAD_ARG, "ndef: not hex, or too long");
     }
     if (!ndef_message_valid(cmd->ndef, (size_t)n)) {
-        return fail(err, APP_ERR_BAD_ARG, "ndef: not a complete NDEF message");
+        return fail(err, APP_ERR_BAD_ARG, "ndef: not a complete NDEF message, or text that is not UTF-8");
     }
     cmd->ndef_len = (uint16_t)n;
 
@@ -388,8 +388,15 @@ bool proto_parse(const char *line, size_t len, app_cmd_t *cmd, proto_err_t *err)
         err->cmd = app_cmd_name(cmd->type);
         ok = parse_id(obj, false, cmd, err) && parse_ota(obj, cmd, err);
     } else {
-        /* Answered as a `rsp` under the name given, so the sender can match it up. */
+        /* Answered as a `rsp` under the name given, so the sender can match it up. A long name
+         * is cut, on a character boundary so the answer is still a string. */
         snprintf(err->name, sizeof(err->name), "%s", name->valuestring);
+        for (size_t i = strlen(err->name); i > 0 && (err->name[i - 1] & 0xC0) == 0x80; i--) {
+            err->name[i - 1] = '\0';
+        }
+        if (strlen(err->name) == sizeof(err->name) - 1 && (err->name[sizeof(err->name) - 2] & 0x80)) {
+            err->name[sizeof(err->name) - 2] = '\0';       /* the lead byte of a cut character */
+        }
         err->cmd = err->name;
         ok = parse_id(obj, false, cmd, err) && fail(err, APP_ERR_UNKNOWN_CMD, "");
     }
@@ -681,12 +688,23 @@ size_t proto_format(const app_evt_t *evt, char *out, size_t cap)
         break;                          /* handled above */
     }
 
-    /* cJSON wants a few bytes of slack beyond what it prints; one more is kept for the '\n'. */
+    /* cJSON wants a few bytes of slack beyond what it prints; one more is kept for the '\n'.
+     * A tag's text and uri, once escaped, can outgrow any line: the event then goes without
+     * them, since its outcome matters more than what the tag held. */
     size_t len = 0;
-    if (cap > 1 && cJSON_PrintPreallocated(obj, out, (int)(cap - 1), false)) {
-        len = strlen(out);
-        out[len++] = '\n';
-        out[len] = '\0';
+    for (int attempt = 0; attempt < 2 && len == 0; attempt++) {
+        if (cap > 1 && cJSON_PrintPreallocated(obj, out, (int)(cap - 1), false)) {
+            len = strlen(out);
+            out[len++] = '\n';
+            out[len] = '\0';
+        } else if (cJSON_HasObjectItem(obj, "text") || cJSON_HasObjectItem(obj, "uri")) {
+            cJSON_DeleteItemFromObject(obj, "text");
+            cJSON_DeleteItemFromObject(obj, "uri");
+            cJSON_DeleteItemFromObject(obj, "detail");
+            cJSON_AddStringToObject(obj, "detail", "text and uri omitted: too long for a line");
+        } else {
+            break;
+        }
     }
     cJSON_Delete(obj);
     return len;

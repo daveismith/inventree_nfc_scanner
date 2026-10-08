@@ -32,8 +32,11 @@ static StreamBufferHandle_t s_rx;
 static SemaphoreHandle_t s_tx_lock;
 static volatile bool s_mounted;
 static volatile size_t s_rx_accepted;              /* bytes put into the stream so far */
-static volatile size_t s_rx_lost_at = SIZE_MAX;    /* s_rx_accepted at the first loss not yet dealt with; SIZE_MAX: none */
-static volatile size_t s_rx_lost_until;            /* s_rx_accepted at the latest loss */
+/* Where bytes were lost, as positions in the stream: written by the TinyUSB task, read by the
+ * receive task, each with its own index, so no update is ever missed. */
+#define LOSS_RING   4
+static volatile size_t s_loss_pos[LOSS_RING];
+static volatile unsigned s_loss_w, s_loss_r;
 static bool s_dtr;
 static bool s_touch_armed;
 
@@ -47,12 +50,13 @@ static void cdc_rx_cb(int itf, cdcacm_event_t *event)
         const size_t took = xStreamBufferSend(s_rx, buf, n, 0);
         s_rx_accepted += took;
         if (took != n) {
-            /* The line in progress at this byte is damaged, through its end; a second loss
-             * before the receive task gets there extends the damage to its own line. */
-            if (s_rx_lost_at == SIZE_MAX) {
-                s_rx_lost_at = s_rx_accepted;
+            /* The line in progress at this byte is damaged, through its end. */
+            if (s_loss_w - s_loss_r < LOSS_RING) {
+                s_loss_pos[s_loss_w % LOSS_RING] = s_rx_accepted;
+                s_loss_w++;
+            } else {
+                s_loss_pos[(s_loss_w - 1) % LOSS_RING] = s_rx_accepted;   /* the latest stands for the rest */
             }
-            s_rx_lost_until = s_rx_accepted;
         }
     }
 }
@@ -123,17 +127,14 @@ static void rx_task(void *arg)
         uint8_t chunk[128];
         const size_t n = xStreamBufferReceive(s_rx, chunk, sizeof(chunk), portMAX_DELAY);
         for (size_t i = 0; i < n; i++) {
-            if (consumed == s_rx_lost_at) {
-                discard = true;         /* from here to the '\n' after the latest loss is what was cut */
+            while (s_loss_r != s_loss_w && consumed == s_loss_pos[s_loss_r % LOSS_RING]) {
+                discard = true;         /* from here to the end of this line is what the loss cut */
+                s_loss_r++;
             }
-            const size_t index = consumed++;
+            consumed++;
             const char c = (char)chunk[i];
             if (c == '\n') {
                 if (discard) {
-                    if (s_rx_lost_at != SIZE_MAX && index < s_rx_lost_until) {
-                        continue;       /* a later loss damaged the next line too */
-                    }
-                    s_rx_lost_at = SIZE_MAX;
                     discard = false;
                     if (s_cfg.on_line_too_long) {
                         s_cfg.on_line_too_long(s_cfg.ctx);

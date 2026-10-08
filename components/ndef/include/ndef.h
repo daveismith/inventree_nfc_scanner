@@ -36,7 +36,7 @@ typedef struct {
  */
 bool ndef_parse_message(const uint8_t *msg, size_t len, ndef_info_t *out);
 
-/* Structural check only: what `program` runs on the bytes the page sent. */
+/* A structural check, and that any Text or URI record is usable: what `program` runs on the bytes the page sent. */
 bool ndef_message_valid(const uint8_t *msg, size_t len);
 
 /*

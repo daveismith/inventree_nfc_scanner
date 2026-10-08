@@ -1,5 +1,5 @@
 ARG DOCKER_TAG=v6.1
-# The version the dependencies.lock files were resolved against; see README "Build".
+# The ESP-IDF version this project is built with; its dependencies.lock files were resolved against it.
 FROM espressif/idf:${DOCKER_TAG}
 
 ENV LC_ALL=C.UTF-8

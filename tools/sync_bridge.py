@@ -155,7 +155,7 @@ def main():
     ap.add_argument('--wait', type=int, default=25, help='long-poll hold to ask for, seconds (0: plain polling)')
     ap.add_argument('-v', '--verbose', action='store_true')
     args = ap.parse_args()
-    token = args.token or ask_secret('API token: ')
+    token = args.token if args.token is not None else ask_secret('API token: ')
 
     port, serial_number = (args.port, '') if args.port else find_scanner()
     reader = args.reader or (f'nfc-{serial_number}' if serial_number else None)

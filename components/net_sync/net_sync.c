@@ -184,12 +184,21 @@ size_t net_sync_request(net_sync_t *ns, uint32_t now_ms, bool hold, char *out, s
     if (n < 0 || !put(out, cap, &at, head, (size_t)n)) {
         return 0;
     }
-    /* As many of the queued messages as fit, oldest first; what does not goes next time. */
+    /* As many of the queued messages as fit, oldest first; what does not goes next time. One
+     * that could never fit on its own is dropped and counted, so that it cannot block the
+     * rest for ever. */
     uint32_t carried = ns->sent_through;
     for (uint8_t i = 0; i < ns->count; i++) {
         const net_sync_msg_t *m = slot(ns, i);
         const size_t need = (i > 0 ? 1 : 0) + m->len + 2;      /* comma, message, "]}" */
         if (at + need >= cap) {
+            if (i == 0) {
+                ns->head = (uint8_t)((ns->head + 1) % NET_SYNC_QUEUE_LEN);
+                ns->count--;
+                ns->dropped++;
+                i--;
+                continue;
+            }
             break;
         }
         if (i > 0) {

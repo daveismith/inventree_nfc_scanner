@@ -69,7 +69,7 @@ static void on_mount(void *ctx, bool mounted)
     if (mounted) {
         dev_recovery_usb_mounted();
 #if CONFIG_APP_NET_ENABLE
-        ota_note_host_ok();
+        ota_note_usb_host();
 #endif
     }
 }

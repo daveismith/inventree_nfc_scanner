@@ -57,3 +57,6 @@ Desktop.ini
 
 # Tokens and credentials written by the tools; none are needed by the repository
 *.token
+
+# The flash hook remembers the board it last sent to download mode
+.board-serial

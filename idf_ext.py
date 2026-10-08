@@ -18,8 +18,10 @@ Adapted from r2_domeplayer's idf_ext.py. Two differences. There is no UDP trigge
 network link is a client of the InvenTree plugin and listens on nothing. And when no board is
 found, the flash is stopped rather than left to esptool's port autodetection, which sends its
 sync bytes to whatever serial devices it finds. The board that went into download mode is
-recognised again by its USB serial number (its MAC), so another ESP32 on the bench is never
-flashed by mistake; with two scanners connected, -p must say which.
+recognised again by its USB serial number (its MAC), which the hook remembers in
+.board-serial, so another ESP32 on the bench, in download mode or running its own app at
+the same USB ids, is never flashed by mistake; with two scanners connected, -p must say
+which.
 
 The probe is skipped when an explicit -p was given, when ESPPORT is set in the environment
 (idf.py folds that into --port), or when IDF_NO_AUTO_DOWNLOAD=1.
@@ -84,6 +86,25 @@ def _serial_of(port):
     """A port's USB serial number, normalised: the app reports the MAC as 12 hex digits, the ROM
     as colon-separated pairs."""
     return (port.serial_number or '').replace(':', '').upper()
+
+
+SERIAL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.board-serial')
+
+
+def _remember_serial(serial):
+    try:
+        with open(SERIAL_FILE, 'w') as f:
+            f.write(serial + '\n')
+    except OSError:
+        pass
+
+
+def _remembered_serial():
+    try:
+        with open(SERIAL_FILE) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
 
 
 def _find_flashable_port(serial=None):
@@ -183,12 +204,14 @@ def enter_download_mode():
     is neither an app nor a download-mode port to work with.
     """
     app_port = _find_app_port()
-    # A board already in download mode (an interrupted flash) can only be told by its serial
-    # number, which is this board's when no scanner is running alongside; with a scanner
-    # present, the scanner is the board, and any lone ROM port is somebody else's.
-    already = None if app_port else _find_flashable_port()
+    # A board left in download mode by an interrupted flash is recognised by its serial
+    # number, remembered from when this hook sent it there. Any other port at the ROM's
+    # ids is some other ESP32 (every one running its own app shows the same ids) and is
+    # left alone.
+    remembered = _remembered_serial()
+    already = None if app_port or not remembered else _find_flashable_port(remembered)
     if already:
-        _note(f'A board is in download mode on {already.device} (serial {_serial_of(already) or "unknown"}); using it')
+        _note(f'The board is still in download mode on {already.device} (serial {remembered}); using it')
         return already
 
     if not app_port:
@@ -199,6 +222,7 @@ def enter_download_mode():
         )
 
     serial = _serial_of(app_port)
+    _remember_serial(serial)
     _note(f'Sending the bootloader command to {app_port.device} (serial {serial})')
     transcript = _send_trigger(app_port.device)
 
@@ -238,9 +262,9 @@ def leave_download_mode():
     if app:
         _note('The board is already running the app')
         return app
-    found = _find_flashable_port()
+    found = _find_flashable_port(_remembered_serial()) if _remembered_serial() else None
     if not found:
-        raise NoBoard('No board in download mode')
+        raise NoBoard('No board of ours in download mode (a board this hook never sent there is not touched; pass -p)')
     subprocess.run(
         [sys.executable, '-m', 'esptool', '--chip', 'esp32s3', '-p', found.device, '--after', 'hard-reset', 'chip-id'],
         check=True,

@@ -16,9 +16,11 @@
 /* At boot: find out whether this image is on trial. */
 void ota_init(void);
 
-/* The two things that together confirm an image on trial. From any task. */
+/* The two things that together confirm an image on trial. From any task. A USB host counts
+ * only for a unit not configured to reach a plugin. */
 void ota_note_reader_up(void);
 void ota_note_host_ok(void);
+void ota_note_usb_host(void);
 
 /* For app_core's environment: start an update. Progress comes as `ota` events. From a remote
  * link the image must be on the plugin's own origin; the digest is always required. */

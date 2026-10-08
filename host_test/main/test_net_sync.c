@@ -271,6 +271,39 @@ static void test_queue_makes_room_for_what_matters(void)
     char small[64];
     TEST_ASSERT_EQUAL(0, net_sync_request(&s_ns, 1, true, small, sizeof(small)));   /* not even the frame */
 
+    /* Carried in parts: the first part acknowledged, the rest goes next, and then the pacing
+     * is back to idle. */
+    start();
+    for (int i = 0; i < 6; i++) {
+        queue("{\"evt\":\"done\",\"id\":1,\"uid\":\"04A1B2C3D4E5F6\",\"type\":\"ntag215\",\"protected\":true}");
+    }
+    char mid[360];
+    TEST_ASSERT_TRUE(net_sync_request(&s_ns, 100, true, mid, sizeof(mid)) > 0);
+    const uint32_t carried = s_ns.sent_through;
+    TEST_ASSERT_TRUE(carried >= 1 && carried < 6);
+    net_sync_response(&s_ns, 110, 200, "{\"ack\":2,\"cmds\":[]}", 20, on_cmd, NULL);
+    TEST_ASSERT_TRUE(net_sync_due(&s_ns, 111));                 /* more to carry */
+    TEST_ASSERT_TRUE(net_sync_request(&s_ns, 111, true, mid, sizeof(mid)) > 0);
+    TEST_ASSERT_NOT_NULL(strstr(mid, "\"seq\":3,"));
+    while (s_ns.sent_through < 6) {
+        char ack[40];
+        snprintf(ack, sizeof(ack), "{\"ack\":%lu,\"cmds\":[]}", (unsigned long)s_ns.sent_through);
+        net_sync_response(&s_ns, 120, 200, ack, strlen(ack), on_cmd, NULL);
+        TEST_ASSERT_TRUE(net_sync_request(&s_ns, 120, true, mid, sizeof(mid)) > 0);
+    }
+    net_sync_response(&s_ns, 130, 200, "{\"ack\":6,\"cmds\":[]}", 20, on_cmd, NULL);
+    TEST_ASSERT_FALSE(net_sync_has_pending(&s_ns));
+    TEST_ASSERT_EQUAL(990, net_sync_delay_ms(&s_ns, 130));     /* idle again */
+
+    /* A message that could never fit the buffer on its own is dropped, not left to block. */
+    start();
+    queue("{\"evt\":\"done\",\"id\":1,\"uid\":\"04A1B2C3D4E5F6\",\"type\":\"ntag215\",\"protected\":true}");
+    queue("{\"evt\":\"tag\",\"uid\":\"04\"}");
+    char tiny[150];
+    TEST_ASSERT_TRUE(net_sync_request(&s_ns, 1, true, tiny, sizeof(tiny)) > 0);
+    TEST_ASSERT_NOT_NULL(strstr(tiny, "\"seq\":2,"));
+    TEST_ASSERT_EQUAL(1, s_ns.dropped);
+
     /* An answer from before a server change is not for the new one. */
     start();
     const uint32_t before = net_sync_generation(&s_ns);

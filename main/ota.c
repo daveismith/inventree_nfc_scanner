@@ -102,6 +102,15 @@ void ota_note_host_ok(void)
     confirm_if_due();
 }
 
+void ota_note_usb_host(void)
+{
+    /* A unit configured for the plugin proves itself by reaching the plugin; being plugged
+     * into something that enumerates it says nothing about its network code. */
+    if (!net_link_configured()) {
+        ota_note_host_ok();
+    }
+}
+
 bool ota_in_progress(void)
 {
     return s_running;

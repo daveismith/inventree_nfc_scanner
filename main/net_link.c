@@ -1,6 +1,7 @@
 #include "net_link.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_crt_bundle.h"
@@ -28,6 +29,7 @@
 #define RESP_MAX        8192
 #define BODY_MAX        8192
 #define HTTP_EXTRA_MS   15000           /* beyond the hold asked for */
+#define RETRY_IF_FAILED_WITHIN_MS 3000  /* a kept connection found dead fails fast; a timeout does not */
 
 /* Task notification bits */
 #define NOTE_WAKE       (1u << 0)
@@ -45,12 +47,17 @@ static TaskHandle_t s_poll_task;
 static TaskHandle_t s_report_task;
 static volatile bool s_holding;         /* the poll task's request is being held by the server */
 static bool s_ever_ok;
+static volatile bool s_configured_flag;     /* configured(), for callers that must not take the lock */
 
 /* Each task's own client and buffers; a slow server must not delay the reader. */
 typedef struct {
     esp_http_client_handle_t client;
     char body[BODY_MAX];
     char resp[RESP_MAX];
+    /* Taken in the same critical section as the body, so a call built for one server never
+     * goes to another with the other's token. Wiped once the call is over. */
+    char url[APP_NET_URL_MAX + 8];
+    char auth[APP_NET_TOKEN_MAX + 8];
 } http_ctx_t;
 
 /*
@@ -111,20 +118,42 @@ bool url_allowed(const char *url)
 }
 
 /* The scheme, host and port of a URL: `*len` bytes from its start. */
-static size_t origin_len(const char *url)
+/*
+ * A URL's origin as "scheme://host:port", the port written out even when it was left to
+ * the default: the HTTP client reports the URL it connected to that way, and
+ * "https://host" and "https://host:443" are one origin. Returns false for anything that is
+ * not an http(s) URL.
+ */
+static bool canonical_origin(const char *url, char *out, size_t cap)
 {
-    const char *rest = strncmp(url, "https://", 8) == 0 ? url + 8 : (strncmp(url, "http://", 7) == 0 ? url + 7 : NULL);
-    if (rest == NULL) {
-        return 0;
+    const bool https = strncmp(url, "https://", 8) == 0;
+    const char *rest = https ? url + 8 : (strncmp(url, "http://", 7) == 0 ? url + 7 : NULL);
+    if (rest == NULL || rest[0] == '\0' || rest[0] == '/') {
+        return false;
     }
     const char *slash = strchr(rest, '/');
-    return slash ? (size_t)(slash - url) : strlen(url);
+    const size_t authority_len = slash ? (size_t)(slash - rest) : strlen(rest);
+    /* The port, if given: after the last ':' that follows any ']' of an IPv6 literal. */
+    const char *bracket = memchr(rest, ']', authority_len);
+    const char *colon = NULL;
+    for (const char *p = bracket ? bracket : rest; p < rest + authority_len; p++) {
+        if (*p == ':') {
+            colon = p;
+        }
+    }
+    const size_t host_len = colon ? (size_t)(colon - rest) : authority_len;
+    const int port = colon ? atoi(colon + 1) : (https ? 443 : 80);
+    if (host_len == 0 || port <= 0 || port > 65535) {
+        return false;
+    }
+    const int n = snprintf(out, cap, "%s://%.*s:%d", https ? "https" : "http", (int)host_len, rest, port);
+    return n > 0 && (size_t)n < cap;
 }
 
 bool same_origin(const char *a, const char *b)
 {
-    const size_t n = origin_len(a);
-    return n > 0 && n == origin_len(b) && strncmp(a, b, n) == 0 && (a[n] == '\0' || a[n] == '/') && (b[n] == '\0' || b[n] == '/');
+    char oa[APP_OTA_URL_MAX + 1], ob[APP_OTA_URL_MAX + 1];
+    return canonical_origin(a, oa, sizeof(oa)) && canonical_origin(b, ob, sizeof(ob)) && strcmp(oa, ob) == 0;
 }
 
 /* Under the lock: the URL the calls go to, from the settings. */
@@ -143,6 +172,11 @@ static void derive_sync_url(void)
 static bool configured(void)
 {
     return s_cfg.enabled && s_cfg.url[0] && s_cfg.token[0] && url_allowed(s_cfg.url);
+}
+
+bool net_link_configured(void)
+{
+    return s_configured_flag;
 }
 
 /* The link as a sink for app_task: what app_core emits for the plugin. App task context. */
@@ -176,7 +210,7 @@ static int do_call_once(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, siz
     *fresh = h->client == NULL;
     if (h->client == NULL) {
         esp_http_client_config_t cfg = {
-            .url = s_sync_url,
+            .url = h->url,
             .method = HTTP_METHOD_POST,
             .timeout_ms = (int)timeout_ms,
             .crt_bundle_attach = esp_crt_bundle_attach,
@@ -189,25 +223,15 @@ static int do_call_once(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, siz
             return -1;
         }
     }
-    /* The URL and token are read under the lock, since the app task may be rewriting them;
-     * the client keeps its own copy of the header, so the stack copy is wiped at once rather
-     * than sitting there for the length of a held call, where a core dump would find it. */
-    char auth[APP_NET_TOKEN_MAX + 8];
-    char url[sizeof(s_sync_url)];
-    lock();
-    snprintf(auth, sizeof(auth), "Token %s", s_cfg.token);
-    memcpy(url, s_sync_url, sizeof(url));
-    unlock();
-    esp_http_client_set_url(h->client, url);
+    esp_http_client_set_url(h->client, h->url);
     esp_http_client_set_method(h->client, HTTP_METHOD_POST);
     esp_http_client_set_timeout_ms(h->client, (int)timeout_ms);
     esp_http_client_set_header(h->client, "Content-Type", "application/json");
-    esp_http_client_set_header(h->client, "Authorization", auth);
-    memset(auth, 0, sizeof(auth));
+    esp_http_client_set_header(h->client, "Authorization", h->auth);
 
     esp_err_t err = esp_http_client_open(h->client, (int)body_len);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "cannot reach %s: %s", url, esp_err_to_name(err));
+        ESP_LOGW(TAG, "cannot reach %s: %s", h->url, esp_err_to_name(err));
         esp_http_client_cleanup(h->client);
         h->client = NULL;
         return -1;
@@ -257,8 +281,11 @@ static int do_call_once(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, siz
 static int do_call(http_ctx_t *h, size_t body_len, uint32_t timeout_ms, size_t *resp_len)
 {
     bool fresh;
+    const uint32_t started = now_ms();
     int status = do_call_once(h, body_len, timeout_ms, resp_len, &fresh);
-    if (status < 0 && !fresh) {
+    /* A connection the server had dropped fails at once; one that timed out did not, and
+     * trying again would only double the wait. */
+    if (status < 0 && !fresh && now_ms() - started < RETRY_IF_FAILED_WITHIN_MS) {
         ESP_LOGI(TAG, "the kept connection was gone; connecting again");
         status = do_call_once(h, body_len, timeout_ms, resp_len, &fresh);
     }
@@ -272,6 +299,8 @@ static void exchange(http_ctx_t *h, bool hold)
     const size_t body_len = net_sync_request(&s_ns, now_ms(), hold, h->body, sizeof(h->body));
     const uint32_t wait_s = hold ? s_cfg.wait_s : 0;
     const uint32_t generation = net_sync_generation(&s_ns);
+    snprintf(h->url, sizeof(h->url), "%s", s_sync_url);
+    snprintf(h->auth, sizeof(h->auth), "Token %s", s_cfg.token);
     if (h == &s_poll_http) {
         s_holding = hold;           /* under the lock, so link_send cannot see it stale */
     }
@@ -284,6 +313,7 @@ static void exchange(http_ctx_t *h, bool hold)
     }
     size_t resp_len;
     const int status = do_call(h, body_len, wait_s * 1000 + HTTP_EXTRA_MS, &resp_len);
+    memset(h->auth, 0, sizeof(h->auth));    /* the client keeps its own copy of the header */
     if (h == &s_poll_http) {
         s_holding = false;
     }
@@ -409,6 +439,7 @@ void net_link_init(void)
 
     lock();
     apply_networks();
+    s_configured_flag = configured();
     unlock();
     ESP_LOGI(TAG, "reader %s, %s, plugin %s", s_reader, s_cfg.enabled ? "enabled" : "disabled",
              s_cfg.url[0] ? s_cfg.url : "(unset)");
@@ -528,6 +559,7 @@ app_err_t net_link_command(const app_cmd_t *cmd, app_net_status_t *status, const
     }
     if (err == APP_ERR_NONE && save) {
         settings_net_save(&s_cfg);
+        s_configured_flag = configured();
     }
     if (err == APP_ERR_NONE && networks_changed) {
         apply_networks();

@@ -24,7 +24,7 @@ extern "C" {
 
 #define NET_SYNC_PROTO          1
 #define NET_SYNC_READER_MAX     32
-#define NET_SYNC_MSG_MAX        2048    /* one queued message: the protocol's longest line */
+#define NET_SYNC_MSG_MAX        2080    /* one queued message: the protocol's longest line, with its "seq" */
 #define NET_SYNC_QUEUE_LEN      12
 #define NET_SYNC_CMD_MAX        2048    /* a command as handed on: the protocol's longest line */
 

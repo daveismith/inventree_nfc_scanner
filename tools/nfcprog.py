@@ -217,7 +217,7 @@ def main():
     q = net.add_parser('server', help="the plugin's URL and the API token")
     q.add_argument('url', help='e.g. https://inventree.example/plugin/nfcscanner')
     q.add_argument('--token', help="an InvenTree API token of the scanner machine's user (prompted for if omitted)")
-    q.add_argument('--no-token', action='store_true', help='change the URL only, keeping the stored token')
+    q.add_argument('--no-token', action='store_true', help='send no token: the stored one is kept for the same server, dropped for another')
     q = net.add_parser('poll', help='pacing')
     q.add_argument('--poll-ms', type=int, help='idle interval, 100 to 60000')
     q.add_argument('--wait-s', type=int, help='long-poll hold, 0 to 300 (0: plain polling)')
@@ -226,7 +226,7 @@ def main():
 
     p = sub.add_parser('ota', help='fetch and install a firmware image, then restart (network builds only)')
     p.add_argument('url', help='where the .bin is served')
-    p.add_argument('--sha256', help='its SHA-256, checked before it is used')
+    p.add_argument('--sha256', help='its SHA-256, checked before it is used (this or --file is required)')
     p.add_argument('--file', help='compute --sha256 from this local copy of the image')
 
     p = sub.add_parser('ndef', help='print the NDEF message for a location, in hex')
@@ -292,9 +292,9 @@ def main():
                 cmd.update(action='forget', ssid=args.ssid)
             elif a == 'server':
                 cmd.update(action='server', url=args.url)
-                if args.token and args.no_token:
+                if args.token is not None and args.no_token:
                     sys.exit('--token and --no-token together make no sense')
-                if args.token:
+                if args.token is not None:
                     cmd['token'] = args.token
                 elif not args.no_token:
                     cmd['token'] = ask_secret('API token: ')
@@ -311,6 +311,8 @@ def main():
             return 0 if rsp.get('ok') else 1
         elif args.command == 'ota':
             cmd = {'cmd': 'ota', 'url': args.url}
+            if not args.file and not args.sha256:
+                sys.exit('the image\'s digest is required: pass --file IMAGE (computed) or --sha256 HEX')
             if args.file:
                 import hashlib
                 with open(args.file, 'rb') as f:

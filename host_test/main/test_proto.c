@@ -390,6 +390,23 @@ static void test_format_log_stays_one_line(void)
     TEST_ASSERT_NULL(strchr(line, '\n'));
 }
 
+/* A tag can hold text that, escaped, outgrows any line: the event still says what happened. */
+static void test_format_sheds_text_and_uri_to_fit(void)
+{
+    static char text[128], uri[256];
+    memset(text, 0x01, sizeof(text) - 1);          /* control characters: six bytes each once escaped */
+    memset(uri, 0x01, sizeof(uri) - 1);
+    app_evt_t evt = { .type = APP_EVT_FAILED, .has_id = true, .id = 7, .error = APP_ERR_NOT_BLANK, .text = text, .uri = uri, .uid_len = 1, .uid = { 0x04 } };
+    const char *line = format(&evt);
+    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"failed\",\"id\":7,\"error\":\"not_blank\",\"uid\":\"04\",\"detail\":\"text and uri omitted: too long for a line\"}", line);
+
+    /* An unknown command with a long, non-ASCII name is still answered as a string. */
+    TEST_ASSERT_FALSE(parse("{\"cmd\":\"\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\"}"));
+    TEST_ASSERT_EQUAL(APP_ERR_UNKNOWN_CMD, s_err.error);
+    TEST_ASSERT_EQUAL(0, strlen(s_err.cmd) % 2);               /* whole two-byte characters only */
+    TEST_ASSERT_TRUE(strlen(s_err.cmd) < sizeof(s_err.name));
+}
+
 static void test_format_reports_what_does_not_fit(void)
 {
     app_evt_t evt = { .type = APP_EVT_WAITING, .has_id = true, .id = 7, .timeout_ms = 60000 };
@@ -412,5 +429,6 @@ void run_proto_tests(void)
     RUN_TEST(test_format_tag_events);
     RUN_TEST(test_format_responses);
     RUN_TEST(test_format_log_stays_one_line);
+    RUN_TEST(test_format_sheds_text_and_uri_to_fit);
     RUN_TEST(test_format_reports_what_does_not_fit);
 }

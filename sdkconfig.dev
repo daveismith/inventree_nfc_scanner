@@ -1,6 +1,9 @@
 # Development overrides, on top of sdkconfig.defaults:
 #
-#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
+#   idf.py -B build-dev -DSDKCONFIG=build-dev/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
+#
+# (its own build directory and sdkconfig, so that the plain build stays the production one;
+# see README "Build and flash")
 #
 # A unit built from sdkconfig.defaults alone has neither of these.
 

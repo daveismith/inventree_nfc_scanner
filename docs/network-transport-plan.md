@@ -301,13 +301,13 @@ Still assumed:
 2. **One firmware or two?** One source tree and a Kconfig switch; the default build has the
    radio in, and a desk-only unit can turn it off.
 
-## Where it stands (2026-10-06)
+## Where it stands (2026-10-08)
 
 Built and tested as far as a bench with no Wi-Fi credentials allows.
 
 | Phase | State |
 | --- | --- |
-| N0 | Done. Commands carry an `origin`; `rsp` and `hello` go to the link that asked, events to every link; a link that closes cancels its own waiting job; `bootloader`, `debug` and `net` from a remote link answer `not_allowed`. The partition table has two application slots and `otadata`; NVS is encrypted (HMAC scheme, eFuse KEY0). Host tests cover the links (`host_test/main/test_app_core.c`). |
+| N0 | Done. Commands carry an `origin`; `rsp` and `hello` go to the link that asked, events to every link; a link that closes cancels its own waiting job; `bootloader`, `debug`, `net` and `hid` from a remote link answer `not_allowed`. The partition table has two application slots and `otadata`; NVS is encrypted (HMAC scheme, eFuse KEY0). Host tests cover the links (`host_test/main/test_app_core.c`). |
 | N1 | Done. `components/net_sync` is the exchange with no network in it, host-tested (`test_net_sync.c`). `tools/fake_plugin.py` stands in for the plugin; `host_sim` speaks `/sync` over a plain socket when `SIM_SYNC_URL` is set; `tools/test_sync.py` runs the phase's exit tests: a job once, nothing lost or doubled with answers dropped at random, a server that goes away and comes back, a reader that restarts, remote refusals, long polling against plain polling. 21 checks. |
 | N2 | Built: `components/wifi_sta` (policy host-tested in `test_wifi_policy.c`), `main/net_link.c` with two HTTP tasks (one polls and may be held, one reports meanwhile), the `net` command and its settings in NVS, `nfcprog.py net ...`, a panel in `webserial.html`. On the board (2026-10-06): the new partition table is in, eFuse KEY0 is burnt with purpose HMAC_UP and read-protected, settings survive a reboot through the encrypted store, the station tries a network that does not exist and gives up when told to forget it, and the plugin URL and token are set. The simulator's link against the plugin's Docker instance runs a job from InvenTree's API to `done` with the barcode linked. What is left needs a network to join. |
 | N3 | Built: https through the certificate bundle, `Authorization: Token`, 401/403/404 stop the link for a minute at a time until it is reconfigured, other failures back off up to 30 s. On the board: pending. |

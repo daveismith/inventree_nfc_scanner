@@ -29,6 +29,10 @@ void net_link_status(app_net_status_t *out);
 void net_link_server(char *url, size_t url_cap, char *token, size_t token_cap);
 
 /* Whether this build may use the URL: https, or http where CONFIG_APP_NET_ALLOW_HTTP; no
- * user info. And whether two URLs share scheme, host and port. */
+ * user info. And whether two URLs share scheme, host and port (a default port written out
+ * counts the same as one left out). */
 bool url_allowed(const char *url);
 bool same_origin(const char *a, const char *b);
+
+/* A plugin URL and token are set and the link is enabled. From any task. */
+bool net_link_configured(void);
