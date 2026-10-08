@@ -1,0 +1,60 @@
+# Builds the firmware in both configurations and runs everything that needs no board: the
+# host unit tests, the simulator's own checks, and the network link against the fake plugin.
+#
+# Actions are pinned by commit hash; the comment after each is the release it maps to.
+
+name: CI
+
+on: ["push", "pull_request"]
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    name: Firmware (ESP32-S3)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build, production configuration
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py build
+          grep -q 'CONFIG_APP_DEV_RECOVERY=y' sdkconfig && { echo "::error::the recovery guard is on in the production build"; exit 1; }
+          grep -q 'CONFIG_APP_NET_ALLOW_HTTP=y' sdkconfig && { echo "::error::http is allowed in the production build"; exit 1; }
+          echo "production image: $(stat -c %s build/inventree_nfc_scanner.bin) bytes"
+      - name: Build, development configuration
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -B build-dev -DSDKCONFIG=build-dev/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
+          grep -q 'CONFIG_APP_DEV_RECOVERY=y' build-dev/sdkconfig
+          grep -q 'CONFIG_APP_NET_ALLOW_HTTP=y' build-dev/sdkconfig
+
+  host:
+    name: Host tests and simulator
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Unit tests (linux target)
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cd host_test
+          idf.py --preview set-target linux build
+          ./build/host_test.elf
+      - name: Simulator checks, and the network link against the fake plugin
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          pip install pyserial
+          (cd host_sim && idf.py --preview set-target linux build)
+          python tools/test_sim.py
+          python tools/test_sync.py
