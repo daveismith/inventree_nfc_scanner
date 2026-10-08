@@ -183,6 +183,27 @@ void ota_restart_when_free(void)
 static esp_ota_handle_t s_handle;
 static const esp_partition_t *s_part;
 static psa_hash_operation_t s_hash;
+/* What is held, so each is let go exactly once: esp_ota_end() frees the handle even when it
+ * fails, and psa_hash_finish() ends the hash, whatever the outcome. serial_abort() releases
+ * only what is still held. */
+static bool s_handle_open;
+static bool s_hash_open;
+
+static void release_handle(void)
+{
+    if (s_handle_open) {
+        esp_ota_abort(s_handle);
+        s_handle_open = false;
+    }
+}
+
+static void release_hash(void)
+{
+    if (s_hash_open) {
+        psa_hash_abort(&s_hash);
+        s_hash_open = false;
+    }
+}
 
 static bool serial_begin(void *ctx, uint32_t size, const char **detail)
 {
@@ -205,12 +226,14 @@ static bool serial_begin(void *ctx, uint32_t size, const char **detail)
         *detail = "no hash";
         return false;
     }
+    s_hash_open = true;
     /* Sequential writes erase as they go, so no command waits for the whole slot's erase. */
     if (esp_ota_begin(s_part, OTA_WITH_SEQUENTIAL_WRITES, &s_handle) != ESP_OK) {
-        psa_hash_abort(&s_hash);
+        release_hash();
         *detail = "could not start writing the slot";
         return false;
     }
+    s_handle_open = true;
     ESP_LOGI(TAG, "update over USB: %lu bytes into %s", (unsigned long)size, s_part->label);
     ota_announce("downloading", NULL);
     return true;
@@ -237,13 +260,15 @@ static bool serial_finish(void *ctx, const uint8_t sha256[32], const char **deta
     (void)ctx;
     uint8_t got[32];
     size_t got_len = 0;
-    if (psa_hash_finish(&s_hash, got, sizeof(got), &got_len) != PSA_SUCCESS || got_len != sizeof(got)
-        || memcmp(got, sha256, sizeof(got)) != 0) {
-        esp_ota_abort(s_handle);
+    const psa_status_t hashed = psa_hash_finish(&s_hash, got, sizeof(got), &got_len);
+    s_hash_open = false;                        /* finished either way */
+    if (hashed != PSA_SUCCESS || got_len != sizeof(got) || memcmp(got, sha256, sizeof(got)) != 0) {
+        release_handle();
         *detail = "sha256 does not match";
         return false;
     }
-    esp_err_t err = esp_ota_end(s_handle);      /* checks the image itself; frees the handle */
+    esp_err_t err = esp_ota_end(s_handle);      /* checks the image itself */
+    s_handle_open = false;                      /* and frees the handle, even when it fails */
     if (err == ESP_OK) {
         err = esp_ota_set_boot_partition(s_part);
     }
@@ -257,8 +282,8 @@ static bool serial_finish(void *ctx, const uint8_t sha256[32], const char **deta
 static void serial_abort(void *ctx)
 {
     (void)ctx;
-    esp_ota_abort(s_handle);
-    psa_hash_abort(&s_hash);
+    release_handle();
+    release_hash();
 }
 
 static void restart_task(void *arg)
