@@ -78,13 +78,17 @@ static app_err_t env_net(void *ctx, const app_cmd_t *cmd, app_net_status_t *stat
     return APP_ERR_NONE;
 }
 
+static app_cmd_t s_ota_cmd;
+static app_err_t s_ota_err;
+static const char *s_ota_detail;
+
 static app_err_t env_ota(void *ctx, const app_cmd_t *cmd, const char **detail)
 {
     (void)ctx;
-    (void)cmd;
+    s_ota_cmd = *cmd;
     s_ota_calls++;
-    *detail = NULL;
-    return APP_ERR_NONE;
+    *detail = s_ota_detail;
+    return s_ota_err;
 }
 
 static bool s_updating;
@@ -768,6 +772,49 @@ static void test_net_and_ota_commands(void)
     TEST_ASSERT_EQUAL(1, s_ota_calls);
 }
 
+/* An image sent over the serial link: only by someone at the board, and ota_data even mid-job
+ * (it cannot begin one, and a session that started has no job running). */
+static void test_serial_ota_is_for_usb_only(void)
+{
+    start();
+    s_core.env.ota = env_ota;
+    s_ota_calls = 0;
+    static const char *begin = "{\"cmd\":\"ota_begin\",\"id\":3,\"size\":10,\"sha256\":"
+                               "\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}";
+    cmd_from(1, true, begin);
+    ASSERT_LINE(0, "{\"rsp\":\"ota_begin\",\"ok\":false,\"id\":3,\"error\":\"not_allowed\"}");
+    forget();
+    cmd_from(1, true, "{\"cmd\":\"ota_data\",\"id\":3,\"at\":0,\"data\":\"AAEC\"}");
+    ASSERT_LINE(0, "{\"rsp\":\"ota_data\",\"ok\":false,\"id\":3,\"error\":\"not_allowed\"}");
+    TEST_ASSERT_EQUAL(0, s_ota_calls);
+
+    forget();
+    cmd(begin);
+    ASSERT_LINE(0, "{\"rsp\":\"ota_begin\",\"ok\":true,\"id\":3}");
+    TEST_ASSERT_EQUAL(1, s_ota_calls);
+    TEST_ASSERT_EQUAL(APP_CMD_OTA_BEGIN, s_ota_cmd.type);
+    TEST_ASSERT_EQUAL(10, s_ota_cmd.ota_size);
+
+    forget();
+    program("");
+    forget();
+    cmd(begin);
+    ASSERT_LINE(0, "{\"rsp\":\"ota_begin\",\"ok\":false,\"id\":3,\"error\":\"busy\"}");
+    cmd("{\"cmd\":\"ota_data\",\"id\":3,\"at\":0,\"data\":\"AAEC\"}");
+    TEST_ASSERT_EQUAL(2, s_ota_calls);
+    TEST_ASSERT_EQUAL(3, s_ota_cmd.ndef_len);
+
+    /* A refusal carries the environment's reason (whatever order the compiler evaluates in). */
+    start();
+    s_core.env.ota = env_ota;
+    s_ota_err = APP_ERR_VERIFY_FAILED;
+    s_ota_detail = "sha256 does not match";
+    cmd("{\"cmd\":\"ota_end\",\"id\":3}");
+    ASSERT_LINE(0, "{\"rsp\":\"ota_end\",\"ok\":false,\"id\":3,\"error\":\"verify_failed\",\"detail\":\"sha256 does not match\"}");
+    s_ota_err = APP_ERR_NONE;
+    s_ota_detail = NULL;
+}
+
 static void test_bootloader_log_and_hello(void)
 {
     start();
@@ -854,6 +901,7 @@ void run_app_core_tests(void)
     RUN_TEST(test_links_a_closing_link_cancels_its_own_job);
     RUN_TEST(test_links_remote_refusals);
     RUN_TEST(test_net_and_ota_commands);
+    RUN_TEST(test_serial_ota_is_for_usb_only);
     RUN_TEST(test_debug_exists_only_where_it_is_wired);
     RUN_TEST(test_feedback_follows_the_state);
 }

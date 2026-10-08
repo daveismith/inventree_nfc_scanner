@@ -12,6 +12,7 @@ stock location, sends a program job, and prints what the device reports.
     nfcprog.py hid off
     nfcprog.py log info
     nfcprog.py bootloader
+    nfcprog.py update build/inventree_nfc_scanner.bin   (install a firmware over USB)
     nfcprog.py ndef --host inventree.example --pk 42      (print the message, send nothing)
 
 The port is found by USB VID:PID unless --port names one (the host simulator's pty, say).
@@ -90,7 +91,10 @@ class Device:
         self.buf = b''
 
     def close(self):
-        self.port.close()
+        try:
+            self.port.close()
+        except OSError:
+            pass
 
     def send(self, obj):
         line = json.dumps(obj, separators=(',', ':'))
@@ -103,7 +107,9 @@ class Device:
         """Yield each object received in the next `seconds`."""
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
-            self.buf += self.port.read(4096)
+            # At least a byte (or the timeout), then whatever else is there: a read of a fixed
+            # size would wait out the timeout on every short answer.
+            self.buf += self.port.read(max(1, self.port.in_waiting))
             while b'\n' in self.buf:
                 raw, self.buf = self.buf.split(b'\n', 1)
                 raw = raw.strip()
@@ -129,6 +135,31 @@ class Device:
             if on_event:
                 on_event(msg)
         sys.exit(f'no answer to {obj["cmd"]!r} within {seconds:.0f}s')
+
+
+CHUNK = 768        # bytes of image per ota_data line (APP_OTA_CHUNK_MAX)
+
+
+def send_image(dev, image, update_id=1, progress=None, on_event=None):
+    """Send a firmware image over the serial link (ota_begin, ota_data..., ota_end). Returns
+    (ok, the failing rsp or None). The device restarts into the image once it has checked it."""
+    import base64
+    import hashlib
+
+    rsp = dev.request({'cmd': 'ota_begin', 'id': update_id, 'size': len(image),
+                       'sha256': hashlib.sha256(image).hexdigest()}, on_event=on_event)
+    if not rsp.get('ok'):
+        return False, rsp
+    for at in range(0, len(image), CHUNK):
+        piece = image[at:at + CHUNK]
+        rsp = dev.request({'cmd': 'ota_data', 'id': update_id, 'at': at,
+                           'data': base64.b64encode(piece).decode()}, seconds=10, on_event=on_event)
+        if not rsp.get('ok'):
+            return False, rsp
+        if progress:
+            progress(at + len(piece), len(image))
+    rsp = dev.request({'cmd': 'ota_end', 'id': update_id}, seconds=30, on_event=on_event)
+    return bool(rsp.get('ok')), (None if rsp.get('ok') else rsp)
 
 
 def show(msg):
@@ -228,6 +259,9 @@ def main():
     p.add_argument('url', help='where the .bin is served')
     p.add_argument('--sha256', help='its SHA-256, checked before it is used (this or --file is required)')
     p.add_argument('--file', help='compute --sha256 from this local copy of the image')
+
+    p = sub.add_parser('update', help='send a firmware image over USB and restart into it (any build)')
+    p.add_argument('file', help='the app image (.bin), as the release has it')
 
     p = sub.add_parser('ndef', help='print the NDEF message for a location, in hex')
     add_location(p)
@@ -329,6 +363,30 @@ def main():
                 if msg.get('evt') == 'ota' and msg.get('state') in ('restarting', 'failed'):
                     return 0 if msg['state'] == 'restarting' else 1
             return 1
+        elif args.command == 'update':
+            with open(args.file, 'rb') as f:
+                image = f.read()
+            started = time.monotonic()
+
+            def progress(done, total):
+                print(f'\r{done * 100 // total:3d}%  {done}/{total} bytes', end='', file=sys.stderr, flush=True)
+
+            ok, rsp = send_image(dev, image, progress=progress, on_event=show)
+            print(file=sys.stderr)
+            if not ok:
+                show(rsp)
+                return 1
+            print(f'sent in {time.monotonic() - started:.1f}s; the device restarts into it', file=sys.stderr)
+            import serial
+
+            try:
+                for msg in dev.lines(5):
+                    show(msg)
+                    if msg.get('evt') == 'ota' and msg.get('state') == 'restarting':
+                        break
+            except serial.SerialException:
+                pass        # the port went away: that is the restart
+            return 0
         elif args.command == 'raw':
             dev.send(json.loads(args.json))
             for msg in dev.lines(args.seconds):

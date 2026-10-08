@@ -8,6 +8,7 @@
 #include "esp_core_dump.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "sdkconfig.h"
@@ -15,6 +16,7 @@
 static const char *TAG = "sysinfo";
 
 static const char *s_reset = "unknown";
+static char s_reader[20];
 static char s_crash[160];
 static bool s_have_crash;
 static bool s_pn532_ok;
@@ -78,12 +80,21 @@ static void read_crash_summary(void)
 
 void sysinfo_init(void)
 {
+    uint8_t mac[6] = { 0 };
+    esp_efuse_mac_get_default(mac);
+    snprintf(s_reader, sizeof(s_reader), "nfc-%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     s_reset = reset_name(esp_reset_reason());
     read_crash_summary();
 }
 
+const char *sysinfo_reader(void)
+{
+    return s_reader;
+}
+
 void sysinfo_get(app_sysinfo_t *out)
 {
+    out->reader = s_reader;
     out->fw = esp_app_get_description()->version;
     out->idf = esp_get_idf_version();
     out->pn532_ok = s_pn532_ok;

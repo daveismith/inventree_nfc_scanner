@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
-# Reported by `info` as "fw".
-set(PROJECT_VER "0.1.0")
+# The firmware version, reported by `info` as "fw", comes from version.txt, which IDF reads
+# by itself. A release tag must match it (tools/make_release.py checks).
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # "Trim" the build. Include the minimal set of components, main, and anything it depends on.

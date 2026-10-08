@@ -310,6 +310,83 @@ static bool parse_ota(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
     return cmd->has_sha256 ? true : fail(err, APP_ERR_BAD_ARG, "sha256: required, 64 hex digits");
 }
 
+/* Standard base64 with padding, as JavaScript's btoa writes it. -1 if it is not, or if it
+ * decodes to more than `cap` bytes. */
+static int base64_decode(const char *in, uint8_t *out, size_t cap)
+{
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const size_t len = strlen(in);
+    if (len == 0 || len % 4 != 0) {
+        return -1;
+    }
+    size_t n = 0;
+    for (size_t i = 0; i < len; i += 4) {
+        uint32_t v = 0;
+        int pad = 0;
+        for (int k = 0; k < 4; k++) {
+            const char c = in[i + k];
+            uint32_t d = 0;
+            if (c == '=') {
+                /* Only at the very end, and at most two. */
+                if (i + 4 != len || k < 2 || (k == 2 && in[i + 3] != '=')) {
+                    return -1;
+                }
+                pad++;
+            } else {
+                const char *p = c ? strchr(alphabet, c) : NULL;
+                if (p == NULL || pad) {
+                    return -1;
+                }
+                d = (uint32_t)(p - alphabet);
+            }
+            v = (v << 6) | d;
+        }
+        const int bytes = 3 - pad;
+        if (n + (size_t)bytes > cap) {
+            return -1;
+        }
+        for (int k = 0; k < bytes; k++) {
+            out[n++] = (uint8_t)(v >> (16 - 8 * k));
+        }
+    }
+    return (int)n;
+}
+
+/* {"cmd":"ota_begin","id":7,"size":1202240,"sha256":"<64 hex>"} */
+static bool parse_ota_begin(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
+{
+    bool has_size;
+    if (!get_uint(obj, "size", 1, 16777216.0, &cmd->ota_size, &has_size, err)) {
+        return false;
+    }
+    if (!has_size) {
+        return fail(err, APP_ERR_BAD_ARG, "size: required");
+    }
+    if (!get_hex_exact(obj, "sha256", cmd->sha256, sizeof(cmd->sha256), &cmd->has_sha256, err)) {
+        return false;
+    }
+    return cmd->has_sha256 ? true : fail(err, APP_ERR_BAD_ARG, "sha256: required, 64 hex digits");
+}
+
+/* {"cmd":"ota_data","id":7,"at":0,"data":"<base64, at most 768 bytes>"} */
+static bool parse_ota_data(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
+{
+    bool has_at;
+    if (!get_uint(obj, "at", 0, 16777216.0, &cmd->ota_at, &has_at, err)) {
+        return false;
+    }
+    if (!has_at) {
+        return fail(err, APP_ERR_BAD_ARG, "at: required");
+    }
+    const cJSON *data = cJSON_GetObjectItemCaseSensitive(obj, "data");
+    const int n = cJSON_IsString(data) ? base64_decode(data->valuestring, cmd->ndef, APP_OTA_CHUNK_MAX) : -1;
+    if (n <= 0) {
+        return fail(err, APP_ERR_BAD_ARG, "data: base64 of 1 to 768 bytes");
+    }
+    cmd->ndef_len = (uint16_t)n;
+    return true;
+}
+
 static bool parse_debug(const cJSON *obj, app_cmd_t *cmd, proto_err_t *err)
 {
     const cJSON *action = cJSON_GetObjectItemCaseSensitive(obj, "action");
@@ -387,6 +464,18 @@ bool proto_parse(const char *line, size_t len, app_cmd_t *cmd, proto_err_t *err)
         cmd->type = APP_CMD_OTA;
         err->cmd = app_cmd_name(cmd->type);
         ok = parse_id(obj, false, cmd, err) && parse_ota(obj, cmd, err);
+    } else if (strcmp(name->valuestring, "ota_begin") == 0) {
+        cmd->type = APP_CMD_OTA_BEGIN;
+        err->cmd = app_cmd_name(cmd->type);
+        ok = parse_id(obj, true, cmd, err) && parse_ota_begin(obj, cmd, err);
+    } else if (strcmp(name->valuestring, "ota_data") == 0) {
+        cmd->type = APP_CMD_OTA_DATA;
+        err->cmd = app_cmd_name(cmd->type);
+        ok = parse_id(obj, true, cmd, err) && parse_ota_data(obj, cmd, err);
+    } else if (strcmp(name->valuestring, "ota_end") == 0) {
+        cmd->type = APP_CMD_OTA_END;
+        err->cmd = app_cmd_name(cmd->type);
+        ok = parse_id(obj, true, cmd, err);
     } else {
         /* Answered as a `rsp` under the name given, so the sender can match it up. A long name
          * is cut, on a character boundary so the answer is still a string. */
@@ -488,6 +577,9 @@ static void add_info(cJSON *obj, const app_evt_t *evt)
     const app_sysinfo_t *sys = evt->sys;
     cJSON_AddNumberToObject(obj, "proto", APP_PROTO_VERSION);
     add_string(obj, "fw", sys->fw);
+    if (sys->reader) {
+        add_string(obj, "reader", sys->reader);
+    }
     add_string(obj, "idf", sys->idf);
     if (sys->pn532_ok) {
         char ver[12];
@@ -629,6 +721,9 @@ size_t proto_format(const app_evt_t *evt, char *out, size_t cap)
         cJSON_AddNumberToObject(obj, "proto", APP_PROTO_VERSION);
         if (evt->sys) {
             add_string(obj, "fw", evt->sys->fw);
+            if (evt->sys->reader) {
+                add_string(obj, "reader", evt->sys->reader);
+            }
         }
         break;
     case APP_EVT_WAITING:

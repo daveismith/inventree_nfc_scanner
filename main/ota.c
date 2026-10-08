@@ -3,9 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "esp_crt_bundle.h"
-#include "esp_http_client.h"
-#include "esp_https_ota.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -17,12 +14,12 @@
 #include "sdkconfig.h"
 
 #include "app_task.h"
-#include "net_link.h"
+#include "ota_stream.h"
 #include "proto.h"
+#if CONFIG_APP_NET_ENABLE
+#include "net_link.h"
+#endif
 
-#define OTA_STACK       8192
-#define OTA_PRIO        3
-#define OTA_TIMEOUT_MS  30000
 #define JOB_WAIT_MS     (10 * 60 * 1000)        /* a job still waiting for its tag ends by itself before this */
 #define CONFIRM_DEADLINE_S (15 * 60)            /* on trial and still unconfirmed: give the old image its turn */
 
@@ -35,10 +32,14 @@ static const char *TAG = "ota";
 static bool s_on_trial;
 static bool s_reader_up;
 static bool s_host_ok;
-static volatile bool s_running;
-static app_cmd_t s_cmd;                 /* the update being made: url and sha256 */
-static char s_plugin_url[APP_NET_URL_MAX + 1];
-static char s_token[APP_NET_TOKEN_MAX + 1];
+static bool s_usb_host_seen;
+static bool s_net_settings_known;
+static volatile bool s_net_running;     /* an image is being fetched over the network */
+/* A new image is ready and the restart is coming. Until it does, the reader must stay idle:
+ * a restart in the middle of an I2C exchange leaves the PN532, which keeps its power, stuck
+ * until it is unplugged. */
+static volatile bool s_restarting;
+static ota_stream_t s_stream;           /* or sent over USB */
 
 static void confirm_if_due(void)
 {
@@ -70,8 +71,14 @@ static void confirm_deadline(void *arg)
     }
 }
 
+static void ota_serial_init(void);
+
 void ota_init(void)
 {
+    ota_serial_init();
+#if !CONFIG_APP_NET_ENABLE
+    s_net_settings_known = true;        /* there are none: a USB host is judged at once */
+#endif
     const esp_partition_t *running = esp_ota_get_running_partition();
     esp_ota_img_states_t state;
     if (running && esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
@@ -102,14 +109,17 @@ void ota_note_host_ok(void)
     confirm_if_due();
 }
 
-static bool s_usb_host_seen;
-static bool s_net_settings_known;
 
 static void judge_usb_host(void)
 {
     /* A unit configured for the plugin proves itself by reaching the plugin; being plugged
      * into something that enumerates it says nothing about its network code. */
-    if (s_usb_host_seen && s_net_settings_known && !net_link_configured()) {
+#if CONFIG_APP_NET_ENABLE
+    const bool configured = net_link_configured();
+#else
+    const bool configured = false;
+#endif
+    if (s_usb_host_seen && s_net_settings_known && !configured) {
         ota_note_host_ok();
     }
 }
@@ -129,10 +139,24 @@ void ota_net_settings_known(void)
 
 bool ota_in_progress(void)
 {
-    return s_running;
+    return s_net_running || s_restarting || ota_stream_active(&s_stream);
 }
 
-static void announce(const char *state, const char *detail)
+bool ota_net_claim(void)
+{
+    if (ota_in_progress()) {
+        return false;
+    }
+    s_net_running = true;
+    return true;
+}
+
+void ota_net_release(void)
+{
+    s_net_running = false;
+}
+
+void ota_announce(const char *state, const char *detail)
 {
     static char line[320];
     app_evt_t evt = { .type = APP_EVT_OTA, .origin = APP_ORIGIN_ALL, .state = state, .detail = detail };
@@ -142,154 +166,189 @@ static void announce(const char *state, const char *detail)
     }
 }
 
-/*
- * The token goes along only to the plugin's own origin: same scheme, host and port. That is
- * decided again on every connection, since the updater follows redirects, and a redirect to
- * another host must not carry it.
- */
-static esp_err_t on_http_event(esp_http_client_event_t *evt)
+
+void ota_restart_when_free(void)
 {
-    if (evt->event_id != HTTP_EVENT_ON_CONNECTED) {
-        return ESP_OK;
-    }
-    char url[APP_OTA_URL_MAX + 1] = { 0 };
-    esp_http_client_get_url(evt->client, url, sizeof(url));
-    if (s_plugin_url[0] && s_token[0] && same_origin(url, s_plugin_url)) {
-        char auth[APP_NET_TOKEN_MAX + 8];
-        snprintf(auth, sizeof(auth), "Token %s", s_token);
-        esp_http_client_set_header(evt->client, "Authorization", auth);
-        memset(auth, 0, sizeof(auth));
-    } else {
-        esp_http_client_delete_header(evt->client, "Authorization");
-    }
-    return ESP_OK;
-}
-
-/* SHA-256 of the image just written, compared with what the command said. */
-static bool digest_matches(esp_https_ota_handle_t h)
-{
-    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
-    const int len = esp_https_ota_get_image_len_read(h);
-    if (part == NULL || len <= 0 || psa_crypto_init() != PSA_SUCCESS) {
-        return false;
-    }
-    static uint8_t buf[4096];
-    psa_hash_operation_t op = PSA_HASH_OPERATION_INIT;
-    if (psa_hash_setup(&op, PSA_ALG_SHA_256) != PSA_SUCCESS) {
-        return false;
-    }
-    for (int at = 0; at < len; at += (int)sizeof(buf)) {
-        const size_t n = (size_t)(len - at) < sizeof(buf) ? (size_t)(len - at) : sizeof(buf);
-        if (esp_partition_read(part, (size_t)at, buf, n) != ESP_OK || psa_hash_update(&op, buf, n) != PSA_SUCCESS) {
-            psa_hash_abort(&op);
-            return false;
-        }
-    }
-    uint8_t out[32];
-    size_t out_len = 0;
-    if (psa_hash_finish(&op, out, sizeof(out), &out_len) != PSA_SUCCESS || out_len != sizeof(out)) {
-        return false;
-    }
-    return memcmp(out, s_cmd.sha256, sizeof(out)) == 0;
-}
-
-static void ota_task(void *arg)
-{
-    (void)arg;
-    announce("downloading", NULL);
-
-    esp_http_client_config_t http = {
-        .url = s_cmd.ota_url,
-        .timeout_ms = OTA_TIMEOUT_MS,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .keep_alive_enable = true,
-        .buffer_size = 4096,
-        .event_handler = on_http_event,
-    };
-    esp_https_ota_config_t cfg = {
-        .http_config = &http,
-    };
-    esp_https_ota_handle_t h = NULL;
-    esp_err_t err = esp_https_ota_begin(&cfg, &h);
-    const char *failure = NULL;
-    int written = 0;
-    if (err != ESP_OK) {
-        failure = esp_err_to_name(err);
-    } else {
-        for (;;) {
-            err = esp_https_ota_perform(h);
-            if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
-                break;
-            }
-        }
-        if (err != ESP_OK) {
-            failure = esp_err_to_name(err);
-        } else if (!esp_https_ota_is_complete_data_received(h)) {
-            failure = "the image was cut short";
-        } else if (!digest_matches(h)) {
-            failure = "sha256 does not match";
-        }
-        written = esp_https_ota_get_image_len_read(h);
-        if (failure) {
-            esp_https_ota_abort(h);
-        } else {
-            err = esp_https_ota_finish(h);       /* checks the image and makes it the one to boot; frees h */
-            if (err != ESP_OK) {
-                failure = esp_err_to_name(err);
-            }
-        }
-    }
-
-    memset(s_token, 0, sizeof(s_token));
-    if (failure) {
-        ESP_LOGE(TAG, "update failed: %s", failure);
-        announce("failed", failure);
-        s_running = false;
-        vTaskDelete(NULL);
-        return;
-    }
-    ESP_LOGI(TAG, "update written (%d bytes); restarting into it", written);
-    /* Not in the middle of a tag write: a job that began before the download started may
-     * still be running. New ones are refused while the download runs. */
+    /* Not in the middle of a tag write: a job that began before the update started may still
+     * be running. New ones are refused while the update runs. */
     for (int waited = 0; app_task_job_active() && waited < JOB_WAIT_MS; waited += 250) {
         vTaskDelay(pdMS_TO_TICKS(250));
     }
-    announce("restarting", NULL);
+    ota_announce("restarting", NULL);
     vTaskDelay(pdMS_TO_TICKS(500));             /* let the lines out */
     esp_restart();
 }
 
 /*
- * What is trusted here. The plugin's server is trusted already: it hands out the tag
- * passwords and decides every job. So an update asked for over the network must come from
- * that same origin, over the link that is trusted to carry the token, and name the image's
- * digest. From USB, where someone is at the board, any allowed URL will do. There is no
- * signing: the digest proves the image is the one the server meant, not who built it. A
- * unit that must resist a hostile server needs secure boot, which is not in this firmware.
+ * The image over USB: written to the other slot as it arrives, hashed as it goes, checked
+ * and made the one to boot at the end. The same slot, digest rule and trial period as an
+ * update over the network.
  */
-app_err_t ota_start(const app_cmd_t *cmd, const char **detail)
+static esp_ota_handle_t s_handle;
+static const esp_partition_t *s_part;
+static psa_hash_operation_t s_hash;
+/* What is held, so each is let go exactly once: esp_ota_end() frees the handle even when it
+ * fails, and psa_hash_finish() ends the hash, whatever the outcome. serial_abort() releases
+ * only what is still held. */
+static bool s_handle_open;
+static bool s_hash_open;
+
+static void release_handle(void)
 {
-    if (s_running) {
-        *detail = "an update is already in progress";
+    if (s_handle_open) {
+        esp_ota_abort(s_handle);
+        s_handle_open = false;
+    }
+}
+
+static void release_hash(void)
+{
+    if (s_hash_open) {
+        psa_hash_abort(&s_hash);
+        s_hash_open = false;
+    }
+}
+
+static bool serial_begin(void *ctx, uint32_t size, const char **detail)
+{
+    (void)ctx;
+    s_part = esp_ota_get_next_update_partition(NULL);
+    if (s_part == NULL) {
+        *detail = "no slot to write an update to";
+        return false;
+    }
+    if (size > s_part->size) {
+        *detail = "size: larger than the application slot";
+        return false;
+    }
+    if (psa_crypto_init() != PSA_SUCCESS) {
+        *detail = "no hash";
+        return false;
+    }
+    s_hash = (psa_hash_operation_t)PSA_HASH_OPERATION_INIT;
+    if (psa_hash_setup(&s_hash, PSA_ALG_SHA_256) != PSA_SUCCESS) {
+        *detail = "no hash";
+        return false;
+    }
+    s_hash_open = true;
+    /* Sequential writes erase as they go, so no command waits for the whole slot's erase. */
+    if (esp_ota_begin(s_part, OTA_WITH_SEQUENTIAL_WRITES, &s_handle) != ESP_OK) {
+        release_hash();
+        *detail = "could not start writing the slot";
+        return false;
+    }
+    s_handle_open = true;
+    ESP_LOGI(TAG, "update over USB: %lu bytes into %s", (unsigned long)size, s_part->label);
+    ota_announce("downloading", NULL);
+    return true;
+}
+
+static bool serial_write(void *ctx, const uint8_t *data, size_t len, const char **detail)
+{
+    (void)ctx;
+    const esp_err_t err = esp_ota_write(s_handle, data, len);
+    if (err != ESP_OK) {
+        /* The first piece is checked for an image header before anything is written. */
+        *detail = err == ESP_ERR_OTA_VALIDATE_FAILED ? "not a firmware image for this chip" : "flash write failed";
+        return false;
+    }
+    if (psa_hash_update(&s_hash, data, len) != PSA_SUCCESS) {
+        *detail = "hash failed";
+        return false;
+    }
+    return true;
+}
+
+static bool serial_finish(void *ctx, const uint8_t sha256[32], const char **detail)
+{
+    (void)ctx;
+    uint8_t got[32];
+    size_t got_len = 0;
+    const psa_status_t hashed = psa_hash_finish(&s_hash, got, sizeof(got), &got_len);
+    s_hash_open = false;                        /* finished either way */
+    if (hashed != PSA_SUCCESS || got_len != sizeof(got) || memcmp(got, sha256, sizeof(got)) != 0) {
+        release_handle();
+        *detail = "sha256 does not match";
+        return false;
+    }
+    esp_err_t err = esp_ota_end(s_handle);      /* checks the image itself */
+    s_handle_open = false;                      /* and frees the handle, even when it fails */
+    if (err == ESP_OK) {
+        err = esp_ota_set_boot_partition(s_part);
+    }
+    if (err != ESP_OK) {
+        *detail = err == ESP_ERR_OTA_VALIDATE_FAILED ? "not a valid image for this chip" : esp_err_to_name(err);
+        return false;
+    }
+    return true;
+}
+
+static void serial_abort(void *ctx)
+{
+    (void)ctx;
+    release_handle();
+    release_hash();
+}
+
+static void restart_task(void *arg)
+{
+    (void)arg;
+    ota_restart_when_free();
+}
+
+static uint32_t now_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+static void ota_serial_init(void)
+{
+    const ota_stream_backend_t backend = {
+        .begin = serial_begin, .write = serial_write, .finish = serial_finish, .abort = serial_abort,
+    };
+    ota_stream_init(&s_stream, &backend);
+}
+
+app_err_t ota_command(const app_cmd_t *cmd, const char **detail)
+{
+    if (cmd->type == APP_CMD_OTA) {
+#if CONFIG_APP_NET_ENABLE
+        return ota_net_start(cmd, detail);
+#else
+        *detail = "this build has no network";
+        return APP_ERR_UNKNOWN_CMD;
+#endif
+    }
+    if (cmd->type == APP_CMD_OTA_BEGIN && s_net_running) {
+        *detail = "an update over the network is in progress";
         return APP_ERR_BUSY;
     }
-    if (!url_allowed(cmd->ota_url)) {
-        *detail = "url: https only, with no user info (CONFIG_APP_NET_ALLOW_HTTP permits http for testing)";
-        return APP_ERR_BAD_ARG;
+    const bool was_active = ota_stream_active(&s_stream);
+    const app_err_t err = ota_stream_command(&s_stream, cmd, now_ms(), detail);
+    if (err == APP_ERR_NONE && cmd->type == APP_CMD_OTA_END) {
+        /* Set here, in the app task, before it goes back to its loop: the reader is not
+         * polled again, so the restart cannot cut an exchange with it short. */
+        s_restarting = true;
+        ESP_LOGI(TAG, "update over USB written; restarting into it");
+        if (xTaskCreate(restart_task, "ota_restart", 3072, NULL, 3, NULL) != pdPASS) {
+            ota_restart_when_free();
+        }
+    } else if (err != APP_ERR_NONE && was_active && !ota_stream_active(&s_stream)) {
+        ota_announce("failed", *detail);        /* the session it ended was this one's */
     }
-    net_link_server(s_plugin_url, sizeof(s_plugin_url), s_token, sizeof(s_token));
-    if (cmd->remote && !same_origin(cmd->ota_url, s_plugin_url)) {
-        memset(s_token, 0, sizeof(s_token));
-        *detail = "from the network, an image must come from the plugin's own server";
-        return APP_ERR_NOT_ALLOWED;
+    return err;
+}
+
+void ota_link_down(uint8_t origin)
+{
+    if (ota_stream_link_down(&s_stream, origin)) {
+        ota_announce("failed", "the link went down mid-update");
     }
-    s_cmd = *cmd;
-    s_running = true;
-    if (xTaskCreate(ota_task, "ota", OTA_STACK, NULL, OTA_PRIO, NULL) != pdPASS) {
-        s_running = false;
-        memset(s_token, 0, sizeof(s_token));
-        *detail = "no memory for the update task";
-        return APP_ERR_BUSY;
+}
+
+void ota_poll(void)
+{
+    if (ota_stream_expire(&s_stream, now_ms())) {
+        ota_announce("failed", "nothing more was sent");
     }
-    return APP_ERR_NONE;
 }

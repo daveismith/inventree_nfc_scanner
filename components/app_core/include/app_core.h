@@ -47,8 +47,9 @@ typedef struct {
     void (*set_log_level)(void *ctx, app_log_level_t level);    /* optional */
     void (*enter_bootloader)(void *ctx);                        /* optional */
     void (*debug)(void *ctx, app_debug_action_t action);        /* optional; absent, `debug` is unknown */
-    /* Optional; absent, `net` and `ota` are unknown commands. On success `net` fills in the
-     * status for the answer; on failure both may name a detail. */
+    /* Optional; absent, `net` and the `ota` commands are unknown. On success `net` fills in
+     * the status for the answer; on failure both may name a detail. `ota` takes `ota`,
+     * `ota_begin`, `ota_data` and `ota_end`, and may answer unknown_cmd for those it lacks. */
     app_err_t (*net)(void *ctx, const app_cmd_t *cmd, app_net_status_t *status, const char **detail);
     app_err_t (*ota)(void *ctx, const app_cmd_t *cmd, const char **detail);
     /* Optional: an update is being fetched, which ends in a restart; no job may begin. */

@@ -50,6 +50,61 @@ static const char *program_line(const char *extra)
     return line;
 }
 
+static void test_parse_serial_ota(void)
+{
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"ota_begin\",\"id\":3,\"size\":1202240,\"sha256\":"
+                           "\"0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef\"}"));
+    TEST_ASSERT_EQUAL(APP_CMD_OTA_BEGIN, s_cmd.type);
+    TEST_ASSERT_EQUAL(1202240, s_cmd.ota_size);
+    TEST_ASSERT_EQUAL_HEX8(0x01, s_cmd.sha256[0]);
+    assert_rejected("{\"cmd\":\"ota_begin\",\"size\":10,\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}",
+                    APP_ERR_BAD_ARG, "ota_begin");     /* id required */
+    assert_rejected("{\"cmd\":\"ota_begin\",\"id\":3,\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}",
+                    APP_ERR_BAD_ARG, "ota_begin");
+    assert_rejected("{\"cmd\":\"ota_begin\",\"id\":3,\"size\":0,\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}",
+                    APP_ERR_BAD_ARG, "ota_begin");
+    assert_rejected("{\"cmd\":\"ota_begin\",\"id\":3,\"size\":10}", APP_ERR_BAD_ARG, "ota_begin");
+
+    /* Base64 as btoa writes it, with its padding. */
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"ota_data\",\"id\":3,\"at\":768,\"data\":\"AAEC/w==\"}"));
+    TEST_ASSERT_EQUAL(APP_CMD_OTA_DATA, s_cmd.type);
+    TEST_ASSERT_EQUAL(768, s_cmd.ota_at);
+    TEST_ASSERT_EQUAL(4, s_cmd.ndef_len);
+    const uint8_t want[] = { 0x00, 0x01, 0x02, 0xff };
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, s_cmd.ndef, 4);
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"ota_data\",\"id\":3,\"at\":0,\"data\":\"TWFu\"}"));
+    TEST_ASSERT_EQUAL(3, s_cmd.ndef_len);
+    TEST_ASSERT_EQUAL_MEMORY("Man", s_cmd.ndef, 3);
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"ota_data\",\"id\":3,\"at\":0,\"data\":\"TWE=\"}"));
+    TEST_ASSERT_EQUAL(2, s_cmd.ndef_len);
+
+    static const char *bad[] = { "", "TWF", "TW=u", "T===", "TWFu=", "TW!u", "TWE=TWFu" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        char line[128];
+        snprintf(line, sizeof(line), "{\"cmd\":\"ota_data\",\"id\":3,\"at\":0,\"data\":\"%s\"}", bad[i]);
+        assert_rejected(line, APP_ERR_BAD_ARG, "ota_data");
+    }
+    /* The most a line carries: 768 bytes, 1024 characters; one piece more is refused. */
+    static char line[1200];
+    int at = snprintf(line, sizeof(line), "{\"cmd\":\"ota_data\",\"id\":3,\"at\":0,\"data\":\"");
+    for (int i = 0; i < 1024; i++) {
+        line[at++] = 'A';
+    }
+    snprintf(line + at, sizeof(line) - (size_t)at, "\"}");
+    TEST_ASSERT_TRUE(parse(line));
+    TEST_ASSERT_EQUAL(APP_OTA_CHUNK_MAX, s_cmd.ndef_len);
+    at = snprintf(line, sizeof(line), "{\"cmd\":\"ota_data\",\"id\":3,\"at\":0,\"data\":\"");
+    for (int i = 0; i < 1028; i++) {
+        line[at++] = 'A';
+    }
+    snprintf(line + at, sizeof(line) - (size_t)at, "\"}");
+    assert_rejected(line, APP_ERR_BAD_ARG, "ota_data");
+
+    TEST_ASSERT_TRUE(parse("{\"cmd\":\"ota_end\",\"id\":3}"));
+    TEST_ASSERT_EQUAL(APP_CMD_OTA_END, s_cmd.type);
+    assert_rejected("{\"cmd\":\"ota_end\"}", APP_ERR_BAD_ARG, "ota_end");
+}
+
 static void test_parse_simple_commands(void)
 {
     TEST_ASSERT_TRUE(parse("{\"cmd\":\"info\"}"));
@@ -345,7 +400,7 @@ static void test_format_tag_events(void)
 static void test_format_responses(void)
 {
     app_sysinfo_t sys = {
-        .fw = "0.1.0", .idf = "v6.1", .pn532_ok = true, .pn532_ic = 0x32, .pn532_ver = 1, .pn532_rev = 6,
+        .reader = "nfc-34b7da52a084", .fw = "0.1.0", .idf = "v6.1", .pn532_ok = true, .pn532_ic = 0x32, .pn532_ver = 1, .pn532_rev = 6,
         .buzzer = false, .reset = "poweron", .crash = NULL, .uptime_ms = 1234,
     };
     app_evt_t evt = {
@@ -353,7 +408,7 @@ static void test_format_responses(void)
         .has_hid = true, .hid = true,
     };
     TEST_ASSERT_EQUAL_STRING(
-        "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"idf\":\"v6.1\","
+        "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"reader\":\"nfc-34b7da52a084\",\"idf\":\"v6.1\","
         "\"pn532\":{\"ic\":50,\"ver\":\"1.6\"},\"state\":\"idle\",\"job\":null,\"tag\":null,\"hid\":true,"
         "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":null,\"uptime_ms\":1234,\"net\":null}", format(&evt));
 
@@ -365,7 +420,7 @@ static void test_format_responses(void)
     evt.uid_len = 7;
     memcpy(evt.uid, ((const uint8_t[]){ 0x04, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6 }), 7);
     TEST_ASSERT_EQUAL_STRING(
-        "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"idf\":\"v6.1\","
+        "{\"rsp\":\"info\",\"ok\":true,\"proto\":1,\"fw\":\"0.1.0\",\"reader\":\"nfc-34b7da52a084\",\"idf\":\"v6.1\","
         "\"pn532\":null,\"state\":\"nfc_error\",\"job\":7,\"tag\":\"04A1B2C3D4E5F6\",\"hid\":true,"
         "\"buzzer\":false,\"reset\":\"poweron\",\"crash\":\"panic in \\\"nfc_app\\\"\",\"uptime_ms\":1234,\"net\":null}",
         format(&evt));
@@ -377,7 +432,7 @@ static void test_format_responses(void)
     TEST_ASSERT_EQUAL_STRING("{\"rsp\":\"hid\",\"ok\":true,\"enabled\":false}", format(&evt));
 
     evt = (app_evt_t){ .type = APP_EVT_HELLO, .sys = &sys };
-    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"hello\",\"proto\":1,\"fw\":\"0.1.0\"}", format(&evt));
+    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"hello\",\"proto\":1,\"fw\":\"0.1.0\",\"reader\":\"nfc-34b7da52a084\"}", format(&evt));
 }
 
 static void test_format_log_stays_one_line(void)
@@ -437,4 +492,5 @@ void run_proto_tests(void)
     RUN_TEST(test_format_log_stays_one_line);
     RUN_TEST(test_format_sheds_text_and_uri_to_fit);
     RUN_TEST(test_format_reports_what_does_not_fit);
+    RUN_TEST(test_parse_serial_ota);
 }

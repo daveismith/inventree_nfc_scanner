@@ -34,6 +34,7 @@ STATE = {
     'seen': set(),          # (boot, seq)
     'log': [],              # messages applied, in order
     'boots': [],
+    'fw': None,             # the firmware version the reader last reported
     'calls': 0,
     'drop': 0.0,
     'dropped': 0,
@@ -98,6 +99,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {
                     'commands': [dict(c) for c in STATE['commands']],
                     'boots': list(STATE['boots']),
+                    'fw': STATE['fw'],
                     'calls': STATE['calls'],
                     'dropped': STATE['dropped'],
                 })
@@ -152,6 +154,7 @@ class Handler(BaseHTTPRequestHandler):
 
         with STATE['lock']:
             STATE['calls'] += 1
+            STATE['fw'] = req.get('fw')
             if boot not in STATE['boots']:
                 STATE['boots'].append(boot)
             for c in STATE['commands']:

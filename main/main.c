@@ -25,9 +25,9 @@
 #include "sysinfo.h"
 #include "usb_dev.h"
 
+#include "ota.h"
 #if CONFIG_APP_NET_ENABLE
 #include "net_link.h"
-#include "ota.h"
 #endif
 
 /* A bool Kconfig option that is off is not defined at all. */
@@ -68,9 +68,7 @@ static void on_mount(void *ctx, bool mounted)
     (void)ctx;
     if (mounted) {
         dev_recovery_usb_mounted();
-#if CONFIG_APP_NET_ENABLE
         ota_note_usb_host();
-#endif
     }
 }
 
@@ -116,8 +114,8 @@ void app_main(void)
     sysinfo_init();
     log_forward_init();
     settings_init();
-#if CONFIG_APP_NET_ENABLE
     ota_init();
+#if CONFIG_APP_NET_ENABLE
     net_link_init();
 #endif
 

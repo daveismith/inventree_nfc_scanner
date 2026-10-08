@@ -27,6 +27,7 @@ jobs:
           grep -q 'CONFIG_APP_DEV_RECOVERY=y' sdkconfig && { echo "::error::the recovery guard is on in the production build"; exit 1; }
           grep -q 'CONFIG_APP_NET_ALLOW_HTTP=y' sdkconfig && { echo "::error::http is allowed in the production build"; exit 1; }
           echo "production image: $(stat -c %s build/inventree_nfc_scanner.bin) bytes"
+          python tools/make_release.py --git-sha "$GITHUB_SHA" --out dist
       - name: Build, development configuration
         shell: bash
         run: |

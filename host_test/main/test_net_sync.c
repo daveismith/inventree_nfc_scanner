@@ -35,7 +35,7 @@ static bool queue(const char *line)
 
 static void start(void)
 {
-    net_sync_init(&s_ns, "nfc-34b7da52a084", 17, 1000, 25);
+    net_sync_init(&s_ns, "nfc-34b7da52a084", "0.2.0", 17, 1000, 25);
     s_ncmds = 0;
     s_cmd_room = 8;
 }
@@ -53,17 +53,28 @@ static void answer(uint32_t now, int status, const char *body)
     net_sync_response(&s_ns, now, status, body, strlen(body), on_cmd, NULL);
 }
 
+/* The version goes into the body unescaped, so anything a version does not need is left out. */
+static void test_fw_is_kept_to_version_characters(void)
+{
+    net_sync_init(&s_ns, "nfc-34b7da52a084", "1.2.3-rc.1\",\"x\":\"y", 17, 1000, 25);
+    request(1000, false);
+    TEST_ASSERT_EQUAL_STRING("{\"reader\":\"nfc-34b7da52a084\",\"fw\":\"1.2.3-rc.1xy\",\"boot\":17,\"proto\":1,\"ack\":0,\"wait_s\":0,\"msgs\":[]}", s_body);
+    net_sync_init(&s_ns, "nfc-34b7da52a084", NULL, 17, 1000, 25);
+    request(1000, false);
+    TEST_ASSERT_NOT_NULL(strstr(s_body, "\"fw\":\"\""));
+}
+
 static void test_request_carries_the_queue_numbered(void)
 {
     start();
     request(1000, true);
-    TEST_ASSERT_EQUAL_STRING("{\"reader\":\"nfc-34b7da52a084\",\"boot\":17,\"proto\":1,\"ack\":0,\"wait_s\":25,\"msgs\":[]}", s_body);
+    TEST_ASSERT_EQUAL_STRING("{\"reader\":\"nfc-34b7da52a084\",\"fw\":\"0.2.0\",\"boot\":17,\"proto\":1,\"ack\":0,\"wait_s\":25,\"msgs\":[]}", s_body);
 
     TEST_ASSERT_TRUE(queue("{\"evt\":\"tag\",\"uid\":\"04A1B2C3D4E5F6\",\"type\":\"ntag215\"}\n"));
     TEST_ASSERT_TRUE(queue("{\"rsp\":\"program\",\"ok\":true,\"id\":317}"));
     TEST_ASSERT_TRUE(net_sync_has_pending(&s_ns));
     request(2000, false);                   /* a report: no hold asked for */
-    TEST_ASSERT_EQUAL_STRING("{\"reader\":\"nfc-34b7da52a084\",\"boot\":17,\"proto\":1,\"ack\":0,\"wait_s\":0,\"msgs\":["
+    TEST_ASSERT_EQUAL_STRING("{\"reader\":\"nfc-34b7da52a084\",\"fw\":\"0.2.0\",\"boot\":17,\"proto\":1,\"ack\":0,\"wait_s\":0,\"msgs\":["
                              "{\"seq\":1,\"evt\":\"tag\",\"uid\":\"04A1B2C3D4E5F6\",\"type\":\"ntag215\"},"
                              "{\"seq\":2,\"rsp\":\"program\",\"ok\":true,\"id\":317}]}", s_body);
 
@@ -322,6 +333,7 @@ static void test_queue_makes_room_for_what_matters(void)
 
 void run_net_sync_tests(void)
 {
+    RUN_TEST(test_fw_is_kept_to_version_characters);
     RUN_TEST(test_request_carries_the_queue_numbered);
     RUN_TEST(test_what_is_not_for_the_server);
     RUN_TEST(test_commands_are_acted_on_once_and_acknowledged);

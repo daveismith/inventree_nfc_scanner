@@ -43,6 +43,9 @@ const char *app_cmd_name(app_cmd_type_t type)
     case APP_CMD_DEBUG:      return "debug";
     case APP_CMD_NET:        return "net";
     case APP_CMD_OTA:        return "ota";
+    case APP_CMD_OTA_BEGIN:  return "ota_begin";
+    case APP_CMD_OTA_DATA:   return "ota_data";
+    case APP_CMD_OTA_END:    return "ota_end";
     }
     return "unknown";
 }
@@ -274,7 +277,8 @@ static void cmd_net(app_core_t *core, const app_cmd_t *cmd)
  * on the desk and whose session setting a remote link has no session to end. */
 static bool needs_hands(app_cmd_type_t type)
 {
-    return type == APP_CMD_BOOTLOADER || type == APP_CMD_DEBUG || type == APP_CMD_NET || type == APP_CMD_HID;
+    return type == APP_CMD_BOOTLOADER || type == APP_CMD_DEBUG || type == APP_CMD_NET || type == APP_CMD_HID
+           || type == APP_CMD_OTA_BEGIN || type == APP_CMD_OTA_DATA || type == APP_CMD_OTA_END;
 }
 
 void app_core_command(app_core_t *core, const app_cmd_t *cmd)
@@ -329,17 +333,23 @@ void app_core_command(app_core_t *core, const app_cmd_t *cmd)
         cmd_net(core, cmd);
         break;
     case APP_CMD_OTA:
+    case APP_CMD_OTA_BEGIN:
+    case APP_CMD_OTA_DATA:
+    case APP_CMD_OTA_END:
         if (core->env.ota == NULL) {
             respond(core, cmd, APP_ERR_UNKNOWN_CMD);
             break;
         }
-        if (core->job_active) {
+        if (core->job_active && cmd->type != APP_CMD_OTA_DATA) {
             respond(core, cmd, APP_ERR_BUSY);   /* a tag may be half written; not now */
             break;
         }
         {
+            /* Called first, on its own: as an argument beside `detail`, the order in which
+             * the two are evaluated is the compiler's choice, and GCC reads detail first. */
             const char *detail = NULL;
-            respond_detail(core, cmd, core->env.ota(core->env.ctx, cmd, &detail), detail);
+            const app_err_t err = core->env.ota(core->env.ctx, cmd, &detail);
+            respond_detail(core, cmd, err, detail);
         }
         break;
     }

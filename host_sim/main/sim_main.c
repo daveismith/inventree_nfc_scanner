@@ -35,6 +35,7 @@
 
 #include "app_core.h"
 #include "proto.h"
+#include "sim_ota.h"
 #include "sim_net.h"
 #include "sim_ntag.h"
 
@@ -112,7 +113,8 @@ static uint32_t env_now_ms(void *ctx)
 static void env_sysinfo(void *ctx, app_sysinfo_t *out)
 {
     (void)ctx;
-    out->fw = "sim";
+    out->reader = getenv("SIM_READER") ? getenv("SIM_READER") : "nfc-sim000000";
+    out->fw = sim_ota_fw();
     out->idf = "host";
     out->pn532_ok = s_nfc_ok;
     out->pn532_ic = 0x32;
@@ -124,6 +126,41 @@ static void env_sysinfo(void *ctx, app_sysinfo_t *out)
         sim_net_status(&s_net_status);
         out->net = &s_net_status;
     }
+}
+
+static void announce_ota(const char *state, const char *detail)
+{
+    const app_evt_t evt = { .type = APP_EVT_OTA, .origin = APP_ORIGIN_ALL, .state = state, .detail = detail };
+    env_emit(NULL, &evt);
+}
+
+/* A good image is in: the simulator "restarts" into it, which to a host looks like the
+ * firmware's restart: the update says so, and the port says hello with the new version. */
+static void sim_restart(const char *new_fw)
+{
+    (void)new_fw;
+    announce_ota("restarting", NULL);
+    app_core_link(&s_core, LINK_PTY, false);
+    app_core_link(&s_core, LINK_PTY, true);
+}
+
+static app_err_t env_ota(void *ctx, const app_cmd_t *cmd, const char **detail)
+{
+    (void)ctx;
+    const bool was_active = sim_ota_active();
+    const app_err_t err = sim_ota_command(cmd, env_now_ms(NULL), detail);
+    if (err == APP_ERR_NONE && cmd->type == APP_CMD_OTA_BEGIN) {
+        announce_ota("downloading", NULL);
+    } else if (err != APP_ERR_NONE && was_active && !sim_ota_active()) {
+        announce_ota("failed", *detail);
+    }
+    return err;
+}
+
+static bool env_updating(void *ctx)
+{
+    (void)ctx;
+    return sim_ota_active();
 }
 
 static void env_hid_type(void *ctx, const char *text)
@@ -288,7 +325,10 @@ void app_main(void)
         .hid_type = env_hid_type,
         .enter_bootloader = env_enter_bootloader,
         .net = sim_net_configured() ? env_net : NULL,
+        .ota = env_ota,
+        .updating = env_updating,
     };
+    sim_ota_init(sim_restart);
     app_core_init(&s_core, &env, true);
     sim_net_init();
     app_core_nfc_state(&s_core, true);
@@ -329,6 +369,7 @@ void app_main(void)
             }
         }
         app_core_tick(&s_core);
+        sim_ota_poll(env_now_ms(NULL));
         poll_tag();
         static char net_cmd[NET_SYNC_CMD_MAX_LINE];
         while (sim_net_step(net_cmd, sizeof(net_cmd))) {

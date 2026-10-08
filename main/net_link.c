@@ -4,11 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_app_desc.h"
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
-#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -22,6 +22,7 @@
 #include "ota.h"
 #include "proto.h"
 #include "settings.h"
+#include "sysinfo.h"
 #include "wifi_sta.h"
 
 #define SYNC_STACK      8192            /* a TLS handshake with the certificate bundle, and cJSON */
@@ -422,13 +423,11 @@ void net_link_init(void)
     s_dispatch = xSemaphoreCreateMutex();
     configASSERT(s_lock && s_dispatch);
 
-    uint8_t mac[6] = { 0 };
-    esp_efuse_mac_get_default(mac);
-    snprintf(s_reader, sizeof(s_reader), "nfc-%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    snprintf(s_reader, sizeof(s_reader), "%s", sysinfo_reader());
 
     settings_net_load(&s_cfg);
     derive_sync_url();
-    net_sync_init(&s_ns, s_reader, esp_random() % 1000000 + 1, s_cfg.poll_ms, s_cfg.wait_s);
+    net_sync_init(&s_ns, s_reader, esp_app_get_description()->version, esp_random() % 1000000 + 1, s_cfg.poll_ms, s_cfg.wait_s);
     app_task_add_link(APP_LINK_NET, true, link_send, NULL);
 
     ESP_ERROR_CHECK(esp_netif_init());
