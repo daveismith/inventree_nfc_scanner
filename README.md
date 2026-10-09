@@ -22,14 +22,20 @@ Known gaps are listed in [docs/open-issues.md](docs/open-issues.md).
 | Part | Connection |
 | --- | --- |
 | Waveshare ESP32-S3-Zero | 4 MB flash; native USB only, no UART bridge |
-| PN532 | I2C at 0x24: SDA GPIO1, SCL GPIO2, 400 kHz. IRQ and RSTPD_N optional |
+| PN532 | I2C at 0x24: SDA GPIO1, SCL GPIO2, 400 kHz. P70_IRQ GPIO3; RSTPD_N not wired (see below) |
 | RGB LED | onboard WS2812, GPIO21 |
 | Piezo buzzer | optional: a passive piezo between a GPIO and GND, or between two GPIOs (louder) |
 | Logs | UART0 TX on GPIO43, 115200 baud |
 
-Pins are set under *InvenTree NFC scanner* in `idf.py menuconfig`. Wiring RSTPD_N is worth
-a GPIO: it is the only way to recover a PN532 that has stopped answering without unplugging
-it. IRQ saves I2C traffic and changes nothing else.
+Pins are set under *InvenTree NFC scanner* in `idf.py menuconfig`; this board's are in
+`sdkconfig.defaults`. IRQ and RSTPD_N are optional (-1 when not wired), but wire RSTPD_N on a
+new unit: it is the only way to recover a PN532 that has stopped answering without
+unplugging it. IRQ saves I2C traffic and changes nothing else.
+
+On the common red PN532 V3 module the header pin next to IRQ is **RSTO**, the chip's reset
+*output*. It cannot reset the chip; do not set it as `APP_NFC_RST_GPIO`. RSTPD_N is not on that
+module's header (it is pulled up on the board), so wiring it means a wire to the chip or its
+pull-up resistor. The desk unit has RSTO on GPIO4, unused by the firmware.
 
 ## Build and flash
 

@@ -43,15 +43,22 @@ low = rough edge. Fixed items are listed at the end, briefly, for the record.
 
 ### 3. A stuck PN532 needs unplugging unless its reset pin is wired
 
-- Where: hardware, and `main/Kconfig.projbuild` `APP_NFC_RST_GPIO` (-1, not wired, on the
-  desk unit).
+- Where: hardware, and `main/Kconfig.projbuild` `APP_NFC_RST_GPIO` (-1, not wired, in
+  `sdkconfig.defaults`).
 - Scenario: the PN532 keeps its power through a software restart. Left in the middle of an
   I2C exchange, it refuses its address until power is removed (seen on the bench: a restart
-  after a USB update cut an exchange short). The driver's bus reset does not reach it, and
-  the firmware cannot reset it. That cause is fixed (the reader stays idle until the restart),
-  but a brown-out or a crash mid-exchange can still leave it so.
-- Fix: wire RSTPD_N to a free GPIO and set `APP_NFC_RST_GPIO`; the driver already pulses it on
-  re-initialisation. Recommend it in the README's hardware table for new units.
+  after a USB update cut an exchange short, and again on 2026-10-08 after reflashing through
+  the bootloader). The driver's bus reset does not reach it, and the firmware cannot reset it.
+  The USB update's cause is fixed (the reader stays idle until the restart), but a flash, a
+  brown-out or a crash mid-exchange can still leave it so.
+- Tried on 2026-10-08: the desk unit now has the module's IRQ on GPIO3 (in use) and its
+  **RSTO** on GPIO4. RSTO is the chip's reset output, not RSTPD_N: pulsing it, even for 100 ms
+  with 2 s to recover, did not bring a stuck chip back, so the firmware leaves GPIO4 alone. The
+  red V3 module does not bring RSTPD_N to its header.
+- Fix: wire RSTPD_N itself (the chip's pin, or the top of its pull-up resistor) to a free GPIO,
+  GPIO4 once RSTO is off it, and set `APP_NFC_RST_GPIO`; the driver already pulses it on
+  re-initialisation. Then check that a pulse brings back a stuck chip, and whether the 20 ms
+  the driver waits after the pulse is long enough.
 
 ## Low
 
