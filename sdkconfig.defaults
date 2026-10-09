@@ -44,7 +44,7 @@ CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 
 # The PN532's P70_IRQ on GPIO3. GPIO4 goes to the module's RSTO, which is the chip's reset
 # output, not its RSTPD_N input, so the firmware leaves it alone: on this module RSTPD_N is not
-# on the header (docs/open-issues.md).
+# on the header (README, "Hardware").
 CONFIG_APP_NFC_IRQ_GPIO=3
 CONFIG_APP_NFC_RST_GPIO=-1
 
