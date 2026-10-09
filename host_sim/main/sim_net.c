@@ -15,8 +15,10 @@
 
 #include "net_sync.h"
 
-#define CMD_RING    4
-#define RESP_MAX    16384
+/* The firmware's limits (main/net_link.c), so that what passes here passes there: two
+ * commands taken per answer, and an answer cut at 8 KB, which then does not parse. */
+#define CMD_RING    2
+#define RESP_MAX    8192
 
 static net_sync_t s_ns;
 static bool s_configured;
@@ -204,7 +206,7 @@ static long dechunk(char *body, size_t len)
 }
 
 /* The answer, once the server has closed the connection or the body is complete. */
-static void handle_response(void)
+static void handle_response(bool cut)
 {
     s_in[s_in_len] = '\0';
     int status = 0;
@@ -218,7 +220,9 @@ static void handle_response(void)
     long body_len = (long)(s_in_len - (size_t)(body - s_in));
     const char *te = header_value(s_in, "Transfer-Encoding");
     const char *cl = header_value(s_in, "Content-Length");
-    if (te && strncasecmp(te, "chunked", 7) == 0) {
+    if (cut) {
+        /* The firmware reads what fits and parses that; so does this. */
+    } else if (te && strncasecmp(te, "chunked", 7) == 0) {
         body_len = dechunk(body, (size_t)body_len);
     } else if (cl) {
         const long want = atol(cl);
@@ -284,15 +288,16 @@ static void step_request(void)
         s_in_len += (size_t)n;
         if (response_complete()) {
             finish();
-            handle_response();
+            handle_response(false);
         } else if (s_in_len >= sizeof(s_in) - 1) {
-            fprintf(stderr, "sim_net: answer over %d bytes\n", RESP_MAX);
+            /* As the firmware does: what fits is handed on, cut, and does not parse. */
+            fprintf(stderr, "sim_net: an answer over %d bytes was cut\n", RESP_MAX);
             finish();
-            net_sync_unreachable(&s_ns, now_ms());
+            handle_response(true);
         }
     } else if (n == 0) {
         finish();
-        handle_response();
+        handle_response(false);
     } else if (errno != EAGAIN && errno != EINTR) {
         finish();
         net_sync_unreachable(&s_ns, now_ms());

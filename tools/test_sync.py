@@ -194,6 +194,16 @@ def main():
         seqs = [m['seq'] for m in log]
         check(len(set(seqs)) == len(seqs), 'no message was applied twice', seqs)
 
+        # --- a long queue: answers carry two commands each, as the plugin caps them, so a
+        # backlog far beyond the reader's 8 KB answer buffer still drains, in order
+        before = len(http('GET', '/log'))
+        for i in range(40):
+            http('POST', '/queue', {'cmd': 'info', 'id': 1000 + i})
+        log = wait_for(lambda log: sum(1 for m in log[before:] if m.get('rsp') == 'info') >= 40, 60,
+                       'forty queued commands to be answered')
+        ids = [m.get('id') for m in log[before:] if m.get('rsp') == 'info']
+        check(ids == list(range(1000, 1040)), 'a backlog of forty commands drains, each once, in order', ids)
+
         # --- the server goes away and comes back (keeping its command numbering, as the real one does)
         last_seq = max(c['seq'] for c in http('GET', '/state')['commands'])
         plugin.kill()

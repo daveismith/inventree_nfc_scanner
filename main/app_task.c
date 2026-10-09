@@ -88,7 +88,9 @@ void app_task_add_link(uint8_t origin, bool remote, app_link_send_t send, void *
 static void send_line(uint8_t origin, const char *line, size_t n)
 {
     for (uint8_t i = 0; i < APP_LINK_MAX; i++) {
-        if (s_links[i].present && (origin == APP_ORIGIN_ALL || origin == i)) {
+        const bool to_link = origin == APP_ORIGIN_ALL || origin == i
+                             || (origin == APP_ORIGIN_LOCAL && !s_links[i].remote);
+        if (s_links[i].present && to_link) {
             s_links[i].send(s_links[i].ctx, line, n);
         }
     }
@@ -241,6 +243,11 @@ void app_task_init(void)
 #endif
     };
     app_core_init(&s_core, &env, false);
+#if CONFIG_APP_HID_TYPE_ANY
+    s_core.hid_prefix = NULL;
+#else
+    s_core.hid_prefix = CONFIG_APP_HID_BARCODE_PREFIX;
+#endif
 }
 
 /*

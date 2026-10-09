@@ -80,6 +80,15 @@ static void broadcast(app_core_t *core, app_evt_t *evt)
     emit(core, evt);
 }
 
+/* A job's progress: every link sees a job the server started; only local links see one
+ * started over USB. The server must not hear of a job it did not give, since it looks jobs
+ * up by id and a USB page numbers its own (a USB `done` matched one of the server's jobs). */
+static void job_broadcast(app_core_t *core, app_evt_t *evt)
+{
+    evt->origin = core->job.remote ? APP_ORIGIN_ALL : APP_ORIGIN_LOCAL;
+    emit(core, evt);
+}
+
 static void feedback(app_core_t *core, app_feedback_t fb)
 {
     if (core->env.feedback) {
@@ -142,6 +151,7 @@ void app_core_init(app_core_t *core, const app_env_t *env, bool hid_default)
     memset(core, 0, sizeof(*core));
     core->env = *env;
     core->hid_default = hid_default;
+    core->hid_prefix = "INV-";
     core->auth0 = NTAG_AUTH0_DEFAULT;
 }
 
@@ -157,7 +167,7 @@ static void job_failed(app_core_t *core, app_err_t error, app_evt_t *evt)
     evt->has_id = true;
     evt->id = core->job.id;
     core->job_active = false;
-    broadcast(core, evt);
+    job_broadcast(core, evt);
     feedback(core, APP_FB_JOB_FAILED);
     show_resting_state(core);
 }
@@ -211,7 +221,7 @@ static void cmd_job(app_core_t *core, const app_cmd_t *cmd)
         .id = cmd->id,
         .timeout_ms = cmd->timeout_ms,
     };
-    broadcast(core, &evt);
+    job_broadcast(core, &evt);
     show_resting_state(core);
 }
 
@@ -390,6 +400,32 @@ static bool printable(const char *s)
     return true;
 }
 
+/* Whether a tap may type this text: printable, and an InvenTree barcode (the prefix, two
+ * capital letters, one to ten digits) unless the prefix is NULL. */
+static bool typeable(const app_core_t *core, const char *s)
+{
+    if (!printable(s)) {
+        return false;
+    }
+    if (core->hid_prefix == NULL) {
+        return true;
+    }
+    const size_t n = strlen(core->hid_prefix);
+    if (strncmp(s, core->hid_prefix, n) != 0) {
+        return false;
+    }
+    s += n;
+    if (!(s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z')) {
+        return false;
+    }
+    s += 2;
+    size_t digits = 0;
+    for (; *s >= '0' && *s <= '9'; s++) {
+        digits++;
+    }
+    return *s == '\0' && digits >= 1 && digits <= 10;
+}
+
 static bool lookup(app_core_t *core, const app_tag_t *tag, nfc_xcvr_t *x)
 {
     app_evt_t evt = { .type = APP_EVT_TAG };
@@ -423,7 +459,7 @@ static bool lookup(app_core_t *core, const app_tag_t *tag, nfc_xcvr_t *x)
 
     broadcast(core, &evt);
     feedback(core, evt.text ? APP_FB_TAG_OK : APP_FB_TAG_UNKNOWN);
-    if (evt.text && app_core_hid_enabled(core) && core->env.hid_type && printable(evt.text)) {
+    if (evt.text && app_core_hid_enabled(core) && core->env.hid_type && typeable(core, evt.text)) {
         core->env.hid_type(core->env.ctx, evt.text);
     }
     return true;
@@ -443,7 +479,7 @@ static void announce_writing(void *ctx)
         .id = w->core->job.id,
     };
     set_uid(&evt, w->tag);
-    broadcast(w->core, &evt);
+    job_broadcast(w->core, &evt);
     feedback(w->core, APP_FB_JOB_WRITING);
 }
 
@@ -504,7 +540,7 @@ static void run_job(app_core_t *core, const app_tag_t *tag, nfc_xcvr_t *x)
     evt.has_protected = true;
     evt.is_protected = st.is_protected;
     core->job_active = false;
-    broadcast(core, &evt);
+    job_broadcast(core, &evt);
     feedback(core, APP_FB_JOB_DONE);
     show_resting_state(core);
 }

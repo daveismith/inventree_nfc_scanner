@@ -184,8 +184,9 @@ with the same state. In a build without `APP_NET_ENABLE`, `net` is an unknown co
   public CAs, on a task of its own so that a slow server never delays the reader. One
   connection is kept open and reused; long polling adds a second.
 - **Wi-Fi** is `components/wifi_sta`, written for this project so that it depends on nothing
-  outside ESP-IDF: a station that keeps up to four networks in NVS, joins the last one that
-  worked at boot, tries the others when that fails, reconnects with back-off when the link
+  outside ESP-IDF: a station that keeps up to four networks in NVS, joins first the one last
+  given with `net join` (`preferred`; the network that last worked is not tracked), tries
+  the others when that fails, reconnects with back-off when the link
   drops, and reports link changes through a hook that becomes the `net` event. It is a few
   hundred lines over `esp_wifi` and `esp_netif`; the station logic is kept apart from the
   radio calls so the host tests can cover the join-and-retry policy.
@@ -232,9 +233,9 @@ when something goes wrong:
   started and a `/sync` has succeeded.
 
 This is phase N4. The link works without it; a unit should not be installed out of reach
-without it. Images are served from wherever an https URL can reach; the token goes along
-only when the URL is on the plugin's own server, so the plugin can serve uploaded firmware
-to the reader's token without the image being public.
+without it. Asked for over the network, an image must be on the plugin's own server (same
+scheme, host and port), and the token goes along only to that origin; from USB, any allowed
+URL will do. The plugin serves the images it holds there (see its `docs/fleet-updates.md`).
 
 ## Phases
 

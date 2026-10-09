@@ -5,11 +5,15 @@
 # (its own build directory and sdkconfig, so that the plain build stays the production one;
 # see README "Build and flash")
 #
-# A unit built from sdkconfig.defaults alone has neither of these.
+# A unit built from sdkconfig.defaults alone has none of these.
 
 # The board sends itself to ROM download mode after a run of crashes or when no host
 # enumerates it, and the `debug` command exists. Not for a unit on a charger or out of reach.
 CONFIG_APP_DEV_RECOVERY=y
+
+# Opening the port at 1200 baud and closing it enters download mode: the flash hook's fallback
+# when the protocol does not answer. Off in production, where any serial prober could trip it.
+CONFIG_APP_USB_TOUCH_1200=y
 
 # The plugin's local Docker instance is plain http. With this off, `net server` and `ota`
 # refuse http:// URLs and a stored http:// URL leaves the link off.

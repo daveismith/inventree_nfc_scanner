@@ -26,6 +26,7 @@ jobs:
           idf.py build
           grep -q 'CONFIG_APP_DEV_RECOVERY=y' sdkconfig && { echo "::error::the recovery guard is on in the production build"; exit 1; }
           grep -q 'CONFIG_APP_NET_ALLOW_HTTP=y' sdkconfig && { echo "::error::http is allowed in the production build"; exit 1; }
+          grep -q 'CONFIG_APP_USB_TOUCH_1200=y' sdkconfig && { echo "::error::the 1200 baud touch is on in the production build"; exit 1; }
           echo "production image: $(stat -c %s build/inventree_nfc_scanner.bin) bytes"
           python tools/make_release.py --git-sha "$GITHUB_SHA" --out dist
       - name: Build, development configuration
@@ -35,6 +36,7 @@ jobs:
           idf.py -B build-dev -DSDKCONFIG=build-dev/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
           grep -q 'CONFIG_APP_DEV_RECOVERY=y' build-dev/sdkconfig
           grep -q 'CONFIG_APP_NET_ALLOW_HTTP=y' build-dev/sdkconfig
+          grep -q 'CONFIG_APP_USB_TOUCH_1200=y' build-dev/sdkconfig
 
   host:
     name: Host tests and simulator

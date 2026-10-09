@@ -29,6 +29,8 @@ extern "C" {
  * own; `rsp` and `hello` go to the link concerned, every other event to all of them.
  */
 #define APP_ORIGIN_ALL          0xFF
+#define APP_ORIGIN_LOCAL        0xFE    /* every link that is not remote: the job events of a job a
+                                           local link started, which are no business of the server */
 
 #define APP_NET_SSID_MAX        32
 #define APP_NET_PSK_MAX         64
