@@ -1,61 +1,32 @@
 # Open issues
 
-Findings from a review of 2026-10-08 that were not fixed at the time. Each is verified
-against the code as of commit `648eb3f`; line numbers drift, so the function names are the
-anchor. Most are design-level gaps at the seams between this firmware, the InvenTree plugin
-(`inventree-nfc-scanner-plugin`, which has its own `docs/open-issues.md`) and the outside
-world, rather than bugs in any one function. The plugin's list carries the server side of the
-shared items.
+What is known to be wrong or missing in this firmware, and not yet fixed. Started from a review
+on 2026-10-08 and kept up to date since (last on 2026-10-08, with the fixes before 1.0). Line
+numbers drift, so the function names are the anchor. Several items are shared with the
+InvenTree plugin (`inventree-nfc-scanner-plugin`, its own `docs/open-issues.md`), which
+carries the server side.
 
 Severity: high = can lose work or strand a unit; medium = wrong behaviour in a realistic case;
-low = rough edge.
+low = rough edge. Fixed items are listed at the end, briefly, for the record.
 
-## High
+## Medium
 
-### 1. An answer over 8 KB jams the network link for good (mitigated for 1.0)
+### 1. A cut answer stalls the link against a server that sends too much
 
-- Mitigated: the plugin sends at most two commands per answer from 1.0.0, which is this
-  firmware's `min_plugin` (`tools/make_release.py`), so an answer stays far under 8 KB. The
-  simulator now has the firmware's limits (two commands taken per answer, an 8 KB answer cut
-  and parsed as the firmware does), and `tools/test_sync.py` drains a backlog of forty.
-- Still open: against a server that sends more (an older plugin, or another server), a cut
-  answer is still a parse failure and the link still stalls. Parsing the commands that are
-  whole, or asking again with a smaller batch, would make the reader robust on its own.
+- Where: `main/net_link.c` (`RESP_MAX` 8 KB, the read loop in `do_call_once`),
+  `components/net_sync/net_sync.c` (`net_sync_response`, the back-off on a body that does not
+  parse).
+- Scenario: a server that sends more pending commands than fit in 8 KB (a plugin before 1.0,
+  which sent them all, or another server) makes the reader cut the answer; it does not parse,
+  the reader backs off and asks again, and gets the same answer. Nothing is acknowledged either
+  way, until the server's queue shrinks.
+- Mitigated: plugin 1.0 sends at most two commands per answer, and this firmware's `min_plugin`
+  is 1.0.0, so a supported server never does this.
+- Fix: parse the commands that are whole from a cut answer, or ask again with a hint for a
+  smaller batch, so the reader copes on its own.
 
-### 2. A tag can type keystrokes into the host (fixed for 1.0)
+### 2. Changing a tag's password is not tear-safe (deferred past 1.0)
 
-- Fixed: a tap types its text only when it is an InvenTree barcode (`CONFIG_APP_HID_BARCODE_PREFIX`,
-  `INV-` by default, two capital letters, one to ten digits); `CONFIG_APP_HID_TYPE_ANY` types
-  any printable text instead. `app_core.c` `typeable()`, host test
-  `test_lookup_types_only_barcodes`.
-
-### 3. The 1200-baud download-mode trigger is live in production builds (fixed for 1.0)
-
-- Fixed: `CONFIG_APP_USB_TOUCH_1200`, off by default and on in `sdkconfig.dev`; CI and
-  `make_release.py` refuse a production build with it on. The flash hook still tries the
-  `bootloader` command first; a production unit whose protocol does not answer needs BOOT.
-
-### 4. A reader restart mid-job leaves the plugin's job stuck (shared with the plugin)
-
-- Where: `components/net_sync/net_sync.c` acknowledges a command (`cmd_ack`) as soon as it is
-  handed to the app task; `main/net_link.c` picks a new random `boot` each start and the RAM
-  queue is lost; plugin side never compares `boot` and never enforces `Job.timeout_s`.
-- Scenario: a job is `waiting`, the reader browns out or is power-cycled and calls in again
-  within the offline window. The job stays `waiting` for ever and the machine stays busy; a
-  later `cancel` is answered `no_job`.
-- Fix: mostly server side (see the plugin's list). On the reader, consider answering a `cancel`
-  for an unknown id with `ok: true` plus `detail: "no such job"`, so the server can end the job.
-- Update (fleet-updates branch): the plugin now compares `boot` and fails the jobs a restarted
-  reader had taken (`scanner_restarted`), and fails a job unreported past its timeout
-  (`no_result`). The `cancel` answered `no_job` is still not acted on.
-
-### 5. USB job ids collide with plugin job ids (fixed on this side for 1.0)
-
-- Fixed: a job started over USB reports its progress to local links only
-  (`APP_ORIGIN_LOCAL`, `app_core.c` `job_broadcast`); the server hears only of jobs it gave.
-  The plugin also ignores events for jobs it did not send (its list, item 6).
-
-### 6. Changing a tag's password is not tear-safe
 
 - Where: `components/ntag21x/ntag21x.c` `protect()`: the new PWD page is written, then PACK,
   while AUTH0 is already active; `t->key` is updated only after the PWD write returns.
@@ -66,19 +37,42 @@ low = rough edge.
 - Fix: on a password change, authenticate and then write AUTH0 off, PWD, PACK, AUTH0 on (so an
   interrupted change leaves the tag open rather than half-changed), or document the recovery
   key. Also switch `t->key` to the new password before the write so a lost ACK can recover.
+- Deferred past 1.0: the plugin's README says to set the tag password once, before tags are
+  programmed (the plugin cannot reach tags protected with an earlier password either: its list,
+  "Tags protected with an earlier password").
+
+### 3. A stuck PN532 needs unplugging unless its reset pin is wired
+
+- Where: hardware, and `main/Kconfig.projbuild` `APP_NFC_RST_GPIO` (-1, not wired, on the
+  desk unit).
+- Scenario: the PN532 keeps its power through a software restart. Left in the middle of an
+  I2C exchange, it refuses its address until power is removed (seen on the bench: a restart
+  after a USB update cut an exchange short). The driver's bus reset does not reach it, and
+  the firmware cannot reset it. That cause is fixed (the reader stays idle until the restart),
+  but a brown-out or a crash mid-exchange can still leave it so.
+- Fix: wire RSTPD_N to a free GPIO and set `APP_NFC_RST_GPIO`; the driver already pulses it on
+  re-initialisation. Recommend it in the README's hardware table for new units.
 
 ## Low
-- Deferred past 1.0: the plugin's README says to set the tag password once, before tags are
-  programmed (the plugin cannot reach tags protected with an earlier password either; its list,
-  item 7).
 
-### 7. The trial-deadline restart ignores a running job
+### 4. A `cancel` for a job the reader no longer has is answered `no_job`
+
+- Where: `components/app_core/app_core.c` `cmd_cancel`.
+- Scenario: the reader restarted, or the job already ended; the plugin cancels; the reader
+  answers `no_job`, which the plugin ignores, so the job ends only at the server's timeout.
+- Fix: answer `ok: true` with `detail: "no such job"` for a cancel whose id is not running, so
+  the server can end the job at once (the plugin's list, "A cancelled job the scanner no
+  longer has").
+
+### 5. The trial-deadline restart ignores a running job
+
 
 - Where: `main/ota.c` `confirm_deadline()` calls `esp_restart()` without checking
   `app_task_job_active()`; the updater's own restart does wait.
 - Fix: wait for the job as the updater does, bounded.
 
-### 8. A tag lifted just before a job starts fails the job at once
+### 6. A tag lifted just before a job starts fails the job at once
+
 
 - Where: `main/app_task.c` offers the remembered tag to a new job while `s_tag_present` is
   still true; removal is declared only after `PRESENCE_MISSES` checks.
@@ -86,39 +80,34 @@ low = rough edge.
   instead of waiting for the next tag; over the network the job must be re-queued.
 - Fix: before offering a remembered tag to a new job, check presence once.
 
-### 9. Commands from one link affect another link's work
+### 7. Commands from one link affect another link's work
+
 
 - Where: `components/app_core/app_core.c` `cmd_cancel` checks no owner; `log` is allowed from
   the network and resets every tag's level through `esp_log_level_set("*")`.
 - Fix: refuse `cancel` for a job another link started (or require the id), and add `log` to
   `needs_hands()`.
 
-### 10. Adding a network during a join tries another network first
+### 8. Adding a network during a join tries another network first
+
 
 - Where: `components/wifi_sta/wifi_sta.c` `wifi_sta_set_networks` disconnects; the disconnect is
   handled as a failed join, which `move_on()`s past the network just added.
 - Fix: mark the disconnect as deliberate so the policy restarts at the preferred network.
 
-### 11. Documentation that disagrees with the code (fixed for 1.0)
+### 9. A just-updated unit refuses another update, saying only that it cannot write
 
-- Fixed: the Wi-Fi preference and the update origin rule in `docs/network-transport-plan.md`;
-  the link endpoint in `README.md` and `tools/webserial.html`; the 255-character URI limit on
-  taps is now stated in the README.
+- Where: `main/ota.c` `serial_begin` and `main/ota_net.c` (`esp_ota_begin` and
+  `esp_https_ota_begin` return `ESP_ERR_OTA_ROLLBACK_INVALID_STATE` while the running image is
+  still on trial).
+- Scenario: an update is installed; within the minute before the new image confirms itself
+  (or longer, if the reader chip is not answering), a second update is refused with "could not
+  start writing the slot". It is the right refusal with the wrong words.
+- Fix: name the reason ("this firmware is still on trial; try again once it has confirmed
+  itself") and say how long that can take.
 
-### 12. The simulator's limits differ from the firmware's (fixed for 1.0)
+### 10. A release's `min_plugin` is set by hand and never checked
 
-- Fixed: `host_sim/main/sim_net.c` takes two commands per answer and cuts an answer at 8 KB,
-  passing the cut body on to be parsed, as `main/net_link.c` does.
-
-## Noted, not planned
-
-- Updates have no image signing and no anti-rollback. A compromised plugin server or token can
-  install any image, an older one included. A unit on a shared network out of USB reach should
-  get secure boot before it is trusted; see "Credentials and trust" in the plan.
-
-## Added after the review
-
-### A release's `min_plugin` is set by hand and never checked
 
 - Where: `MIN_PLUGIN` in `tools/make_release.py`; the plugin's `firmware.compatible` trusts it.
 - Scenario: a firmware change needs plugin behaviour from a later release and the constant is
@@ -126,3 +115,18 @@ low = rough edge.
   cannot drive.
 - Fix: `docs/compat-testing-plan.md`: a contract test of the host simulator against the plugin
   at `min_plugin`, gating the release workflow.
+
+## Noted, not planned
+
+- Updates have no image signing and no anti-rollback. A compromised plugin server or token can
+  install any image, an older one included. A unit on a shared network out of USB reach should
+  get secure boot before it is trusted; see "Credentials and trust" in the plan.
+
+## Fixed, for the record
+
+- **Fixed before 1.0:** keyboard output types only InvenTree barcodes; the 1200-baud touch is
+  development-only; a USB job's events stay off the network link; the simulator has the
+  firmware's network limits; documentation corrected (the Wi-Fi preference, the update
+  origin, the link endpoint, the 255-character URI limit on taps).
+- **Fixed with fleet updates:** jobs a restarted reader forgets are ended by the server
+  (`scanner_restarted`, `no_result`); the USB update leaves the reader idle until its restart.
