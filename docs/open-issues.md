@@ -115,3 +115,14 @@ low = rough edge.
 - Updates have no image signing and no anti-rollback. A compromised plugin server or token can
   install any image, an older one included. A unit on a shared network out of USB reach should
   get secure boot before it is trusted; see "Credentials and trust" in the plan.
+
+## Added after the review
+
+### A release's `min_plugin` is set by hand and never checked
+
+- Where: `MIN_PLUGIN` in `tools/make_release.py`; the plugin's `firmware.compatible` trusts it.
+- Scenario: a firmware change needs plugin behaviour from a later release and the constant is
+  not raised; older plugins are offered (and with automatic deployment sent) a firmware they
+  cannot drive.
+- Fix: `docs/compat-testing-plan.md`: a contract test of the host simulator against the plugin
+  at `min_plugin`, gating the release workflow.

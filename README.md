@@ -89,6 +89,11 @@ match `version.txt` fails the workflow. CI packages every push the same way with
 echo 0.2.0 > version.txt && git commit -am "0.2.0" && git tag v0.2.0 && git push --follow-tags
 ```
 
+Each release names the oldest InvenTree plugin that can drive it (`min_plugin` in the
+manifest, `MIN_PLUGIN` in `tools/make_release.py`). Raise it whenever a firmware change relies
+on something a plugin release added. The plugin holds a release that needs a newer plugin but
+never deploys it. Nothing checks the number yet; `docs/compat-testing-plan.md` is the plan.
+
 `tools/make_release.py --dev --build build-dev` packages a development build for uploading to
 the plugin's local Docker instance (it allows plain http); never publish one.
 
