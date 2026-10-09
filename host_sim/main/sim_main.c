@@ -81,7 +81,7 @@ static void env_emit(void *ctx, const app_evt_t *evt)
     if (n == 0) {
         return;
     }
-    if (evt->origin == LINK_PTY || evt->origin == APP_ORIGIN_ALL) {
+    if (evt->origin == LINK_PTY || evt->origin == APP_ORIGIN_ALL || evt->origin == APP_ORIGIN_LOCAL) {
         write_all(line, n);
     }
     if (evt->origin == LINK_NET || evt->origin == APP_ORIGIN_ALL) {

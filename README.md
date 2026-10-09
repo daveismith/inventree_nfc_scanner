@@ -6,7 +6,9 @@ tags sit in Gridfinity storage bins; each bin is an InvenTree stock location. Th
 - **programs tags** from an InvenTree page over WebSerial. The page holds the InvenTree
   session and does every API call; on this route the device needs no Wi-Fi, URL or token.
 - **looks bins up** on its own: tap a tag and it types the tag's barcode (`INV-SL42`, Enter)
-  as a USB keyboard, which InvenTree's scan field understands.
+  as a USB keyboard, which InvenTree's scan field understands. Only InvenTree barcodes are
+  typed (the prefix, two capital letters, digits), so a planted tag cannot type a command into
+  whatever has focus; `CONFIG_APP_HID_TYPE_ANY` types any printable text instead.
 
 A tag carries one NDEF message with two records: a URI
 (`https://<host>/web/stock/location/<pk>`), so a phone opens the bin's page, and a Text
@@ -145,7 +147,10 @@ Errors: `bad_json`, `line_too_long`, `unknown_cmd`, `bad_arg`, `busy`, `no_job`,
 One job at a time. A tag already on the reader when a job starts is used at once. A tag
 pulled away mid-write is left holding an empty, valid message. `not_blank` reports the text
 and URI already on the tag so the page can ask before overwriting. After `done`, the page
-links the UID to the location with `POST /api/barcode/link/`.
+links the UID to the location through the plugin's `api/location/<pk>/link/`, which, unlike
+InvenTree's own `/api/barcode/link/`, moves a barcode another item already holds (a tag
+re-programmed for another bin). A tap reports a tag's URI only up to 255 characters once its
+prefix is expanded; a longer base URL programs fine, but taps then report no `uri`.
 
 The mapping between lines and structs is `components/proto`; the behaviour is
 `components/app_core`.

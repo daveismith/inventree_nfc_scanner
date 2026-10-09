@@ -33,8 +33,9 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The oldest plugin that can drive this firmware. Raise it when the firmware needs something
-# a plugin release added.
-MIN_PLUGIN = "0.1.0"
+# a plugin release added. 1.0.0: a plugin that sends at most two commands per answer; an
+# uncapped one can send more than the reader's 8 KB answer buffer, and the link then stalls.
+MIN_PLUGIN = "1.0.0"
 
 NAME = "inventree_nfc_scanner"
 
@@ -90,7 +91,7 @@ def main():
         sys.exit(f"the build is of {desc.get('project_version')!r}, version.txt says {version}: rebuild")
     with open(os.path.join(args.build, "sdkconfig") if os.path.exists(os.path.join(args.build, "sdkconfig")) else desc["config_file"]) as f:
         config = f.read()
-    for option in ("CONFIG_APP_DEV_RECOVERY=y", "CONFIG_APP_NET_ALLOW_HTTP=y"):
+    for option in ("CONFIG_APP_DEV_RECOVERY=y", "CONFIG_APP_NET_ALLOW_HTTP=y", "CONFIG_APP_USB_TOUCH_1200=y"):
         if option in config and not args.dev:
             sys.exit(f"{option} is set: this is a development build, not a release")
 

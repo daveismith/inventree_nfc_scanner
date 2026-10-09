@@ -12,44 +12,28 @@ low = rough edge.
 
 ## High
 
-### 1. An answer over 8 KB jams the network link for good
+### 1. An answer over 8 KB jams the network link for good (mitigated for 1.0)
 
-- Where: `main/net_link.c` (`RESP_MAX`, the read loop in `do_call_once`),
-  `components/net_sync/net_sync.c` (`net_sync_response`, the back-off on a body that does not
-  parse); plugin side `sync.py` `handle_sync` step 3, which sends every pending command.
-- Scenario: around 30 queued `program` commands (about 230 bytes each) for one reader make the
-  `/sync` answer exceed `RESP_MAX`. The reader cuts it, the JSON does not parse, it backs off and
-  calls again, and the answer is the same. Nothing is acknowledged in either direction; taps
-  pile up and are dropped; even an `ota` cannot get through. The reader keeps calling, so the
-  plugin never marks it offline. The simulator (`host_sim/main/sim_net.c`) uses a 16 KB buffer
-  and treats an oversized answer as "unreachable", so `tools/test_sync.py` cannot catch this.
-- Fix: cap commands per answer on the server (the reader takes two per call anyway: `cmd_batch_t`
-  in `net_link.c`); on the reader, treat a cut answer as "ask again with a hint" rather than as a
-  parse failure, or parse the commands that are whole. Make the simulator use the firmware's
-  limits (`RESP_MAX` 8 KB, `BODY_MAX` 8 KB, 2 commands per answer) so the end-to-end test is
-  faithful.
+- Mitigated: the plugin sends at most two commands per answer from 1.0.0, which is this
+  firmware's `min_plugin` (`tools/make_release.py`), so an answer stays far under 8 KB. The
+  simulator now has the firmware's limits (two commands taken per answer, an 8 KB answer cut
+  and parsed as the firmware does), and `tools/test_sync.py` drains a backlog of forty.
+- Still open: against a server that sends more (an older plugin, or another server), a cut
+  answer is still a parse failure and the link still stalls. Parsing the commands that are
+  whole, or asking again with a smaller batch, would make the reader robust on its own.
 
-## Medium
+### 2. A tag can type keystrokes into the host (fixed for 1.0)
 
-### 2. A tag can type keystrokes into the host
+- Fixed: a tap types its text only when it is an InvenTree barcode (`CONFIG_APP_HID_BARCODE_PREFIX`,
+  `INV-` by default, two capital letters, one to ten digits); `CONFIG_APP_HID_TYPE_ANY` types
+  any printable text instead. `app_core.c` `typeable()`, host test
+  `test_lookup_types_only_barcodes`.
 
-- Where: `components/app_core/app_core.c` `lookup()` (the `hid_type` call), `printable()`;
-  `main/Kconfig.projbuild` `APP_HID_DEFAULT_ON` defaults to y.
-- Scenario: any tag's Text record is typed on the USB keyboard followed by Enter, filtered only
-  for printable ASCII up to 127 characters. A planted tag holding a shell command runs it in
-  whichever terminal has focus.
-- Fix: type only text matching InvenTree's barcode pattern (`INV-SL<digits>`, or a Kconfig
-  pattern), or default keyboard output off; say so in the README.
+### 3. The 1200-baud download-mode trigger is live in production builds (fixed for 1.0)
 
-### 3. The 1200-baud download-mode trigger is live in production builds
-
-- Where: `components/usb_dev/usb_cdc.c` (the line-coding callback), `main/main.c`
-  `on_touch_1200`, `main/app_download_mode.c`.
-- Scenario: any host program that opens the port at 1200 baud and closes it (an Arduino-style
-  auto-reset, a serial prober) sends a unit in use into ROM download mode; the sticky flag keeps
-  it there until a power cycle or esptool.
-- Fix: gate the touch behind `CONFIG_APP_DEV_RECOVERY` (or its own option, off by default), and
-  document it in the README alongside `idf_ext.py`.
+- Fixed: `CONFIG_APP_USB_TOUCH_1200`, off by default and on in `sdkconfig.dev`; CI and
+  `make_release.py` refuse a production build with it on. The flash hook still tries the
+  `bootloader` command first; a production unit whose protocol does not answer needs BOOT.
 
 ### 4. A reader restart mid-job leaves the plugin's job stuck (shared with the plugin)
 
@@ -65,16 +49,11 @@ low = rough edge.
   reader had taken (`scanner_restarted`), and fails a job unreported past its timeout
   (`no_result`). The `cancel` answered `no_job` is still not acted on.
 
-### 5. USB job ids collide with plugin job ids (shared with the plugin)
+### 5. USB job ids collide with plugin job ids (fixed on this side for 1.0)
 
-- Where: `components/app_core/app_core.c` broadcasts every job event to every link;
-  `components/net_sync/net_sync.c` queues `waiting`, `writing`, `done` and `failed` for the
-  server whatever link started the job; plugin side looks a job up by `id` within the machine.
-- Scenario: `tools/nfcprog.py program` defaults to `--id 1`; its `done` reaches the plugin,
-  which can match a plugin job with pk 1 (in particular one failed as `scanner_offline`, which
-  the plugin re-opens on a late `done`) and link the UID to that job's location.
-- Fix: carry the originating link in job events (or tag plugin jobs with a marker the reader
-  echoes), and have `net_sync_queue` forward only events of jobs the server started.
+- Fixed: a job started over USB reports its progress to local links only
+  (`APP_ORIGIN_LOCAL`, `app_core.c` `job_broadcast`); the server hears only of jobs it gave.
+  The plugin also ignores events for jobs it did not send (its list, item 6).
 
 ### 6. Changing a tag's password is not tear-safe
 
@@ -89,6 +68,9 @@ low = rough edge.
   key. Also switch `t->key` to the new password before the write so a lost ACK can recover.
 
 ## Low
+- Deferred past 1.0: the plugin's README says to set the tag password once, before tags are
+  programmed (the plugin cannot reach tags protected with an earlier password either; its list,
+  item 7).
 
 ### 7. The trial-deadline restart ignores a running job
 
@@ -117,29 +99,16 @@ low = rough edge.
   handled as a failed join, which `move_on()`s past the network just added.
 - Fix: mark the disconnect as deliberate so the policy restarts at the preferred network.
 
-### 11. Documentation that disagrees with the code
+### 11. Documentation that disagrees with the code (fixed for 1.0)
 
-- `docs/network-transport-plan.md` says the station joins "the last one that worked"; in fact
-  `preferred` is the network last given with `join` (`wifi_sta_last_joined()` is never used).
-- The plan's "A unit nobody can reach" section still says images come from any https URL; from
-  the network they must be on the plugin's own origin (`main/ota.c` `ota_start`).
-- `README.md` and `tools/webserial.html` name InvenTree's `POST /api/barcode/link/` as the link
-  endpoint; the plugin uses its own `api/location/<pk>/link/`, which moves a barcode that is
-  already in use.
-- A URI longer than 255 characters once expanded is dropped from taps
-  (`components/ndef/ndef.c`, `NDEF_URI_MAX`), so a long base URL programs fine but taps report
-  no `uri`.
+- Fixed: the Wi-Fi preference and the update origin rule in `docs/network-transport-plan.md`;
+  the link endpoint in `README.md` and `tools/webserial.html`; the 255-character URI limit on
+  taps is now stated in the README.
 
-### 12. The simulator's limits differ from the firmware's
+### 12. The simulator's limits differ from the firmware's (fixed for 1.0)
 
-| | Simulator (`host_sim/main/sim_net.c`) | Firmware (`main/net_link.c`) |
-| --- | --- | --- |
-| Commands accepted per answer | 4 | 2 |
-| Answer buffer | 16 KB | 8 KB |
-| Request body | 6 KB | 8 KB |
-| Answer too big | unreachable | parsed cut short |
-
-Align them, so that `tools/test_sync.py` exercises what the firmware does (see 1).
+- Fixed: `host_sim/main/sim_net.c` takes two commands per answer and cuts an answer at 8 KB,
+  passing the cut body on to be parsed, as `main/net_link.c` does.
 
 ## Noted, not planned
 

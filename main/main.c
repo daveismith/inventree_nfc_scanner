@@ -72,12 +72,14 @@ static void on_mount(void *ctx, bool mounted)
     }
 }
 
+#if CONFIG_APP_USB_TOUCH_1200
 static void on_touch_1200(void *ctx)
 {
     (void)ctx;
     /* Straight to the reboot task, past the protocol: this has to work when that is stuck. */
     app_download_mode_request();
 }
+#endif
 
 void app_main(void)
 {
@@ -99,7 +101,9 @@ void app_main(void)
         .on_line_too_long = on_line_too_long,
         .on_link = on_link,
         .on_mount = on_mount,
-        .on_touch_1200 = on_touch_1200,
+#if CONFIG_APP_USB_TOUCH_1200
+        .on_touch_1200 = on_touch_1200,    /* development builds only: see Kconfig */
+#endif
     };
     ESP_ERROR_CHECK(usb_dev_init(&usb));
     if (dev_recovery_stay_off_usb()) {

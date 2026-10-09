@@ -68,6 +68,10 @@ typedef struct {
     app_env_t env;
     bool nfc_ok;
     bool hid_default;
+    /* What a tap may type: text that is an InvenTree barcode with this prefix (two capital
+     * letters and digits after it, as INV-SL42), so that a planted tag cannot type a command
+     * into whatever has focus. NULL types any printable text. "INV-" after init. */
+    const char *hid_prefix;
     bool hid_override_set;      /* a `hid` command this session, until the link that sent it drops */
     bool hid_override;
     uint8_t hid_override_origin;

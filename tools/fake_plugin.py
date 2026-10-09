@@ -41,6 +41,7 @@ STATE = {
     'token': None,
     'reader': None,
     'hold_max': 25,
+    'max_cmds': 2,
     'poll_ms': 0,
     'seq_start': 0,         # the real plugin's command numbering survives a restart; this says where to go on from
 }
@@ -177,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 STATE['lock'].wait(min(left, 0.25))
             cmds = [dict(c['payload'], seq=c['seq']) for c in pending()]
+            if STATE['max_cmds']:
+                cmds = cmds[:STATE['max_cmds']]     # as the plugin does: the reader takes two a call
             drop = STATE['drop']
             poll_ms = STATE['poll_ms']
 
@@ -197,11 +200,14 @@ def main():
     ap.add_argument('--hold-max', type=int, default=25, help='longest hold for a long poll (0: never hold)')
     ap.add_argument('--poll-ms', type=int, default=0, help='ask the reader for this idle interval')
     ap.add_argument('--seq-start', type=int, default=0, help='number commands from here (a restarted server continuing its numbering)')
+    ap.add_argument('--max-cmds', type=int, default=2,
+                    help='commands per answer, as the plugin caps them (0: all, as plugins before 1.0 did)')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
     STATE['token'] = args.token
     STATE['reader'] = args.reader
     STATE['hold_max'] = args.hold_max
+    STATE['max_cmds'] = args.max_cmds
     STATE['poll_ms'] = args.poll_ms
     STATE['seq_start'] = args.seq_start
     server = ThreadingHTTPServer((args.bind, args.port), Handler)

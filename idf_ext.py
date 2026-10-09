@@ -12,7 +12,9 @@ clears RTC_CNTL_FORCE_DOWNLOAD_BOOT on the way out, so the board comes back up i
 The firmware half is main/app_download_mode.c.
 
 If the protocol does not answer, a 1200 baud touch is tried: the firmware acts on that in the
-USB callback, without going through the protocol at all.
+USB callback, without going through the protocol at all. Only development builds
+(CONFIG_APP_USB_TOUCH_1200, in sdkconfig.dev) listen for it; a production unit whose protocol
+does not answer needs BOOT held while it is plugged in.
 
 Adapted from r2_domeplayer's idf_ext.py. Two differences. There is no UDP trigger: the
 network link is a client of the InvenTree plugin and listens on nothing. And when no board is

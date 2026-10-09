@@ -514,6 +514,45 @@ static void test_reader_failure(void)
     ASSERT_LINE(0, "{\"evt\":\"failed\",\"id\":7,\"error\":\"nfc_error\",\"uid\":\"04A1B2C3D4E5F6\"}");
 }
 
+/* Only InvenTree barcodes are typed: a planted tag must not type a command into the host. */
+static void test_lookup_types_only_barcodes(void)
+{
+    static const char *const typed[] = { "INV-SL42", "INV-PA7", "INV-SI1234567890" };
+    static const char *const not_typed[] = {
+        "rm -rf ~", "INV-SL", "INV-sl42", "INV-S42", "INV-SL42 ", "INV-SL42;ls", "XINV-SL42",
+        "INV-SL12345678901", "Bin 42",
+    };
+    for (size_t i = 0; i < sizeof(typed) / sizeof(typed[0]); i++) {
+        start();
+        tag_holds(typed[i]);
+        tap();
+        TEST_ASSERT_EQUAL_MESSAGE(1, s_ntyped, typed[i]);
+        TEST_ASSERT_EQUAL_STRING(typed[i], s_typed[0]);
+    }
+    for (size_t i = 0; i < sizeof(not_typed) / sizeof(not_typed[0]); i++) {
+        start();
+        tag_holds(not_typed[i]);
+        tap();
+        TEST_ASSERT_EQUAL_MESSAGE(0, s_ntyped, not_typed[i]);
+        TEST_ASSERT_NOT_NULL_MESSAGE(strstr(s_lines[0], "\"evt\":\"tag\""), not_typed[i]);  /* still reported */
+    }
+
+    /* Another prefix, as InvenTree's setting allows. */
+    start();
+    s_core.hid_prefix = "BIN-";
+    tag_holds("BIN-SL42");
+    tap();
+    TEST_ASSERT_EQUAL(1, s_ntyped);
+
+    /* With no prefix, any printable text, as CONFIG_APP_HID_TYPE_ANY builds have it. */
+    start();
+    s_core.hid_prefix = NULL;
+    tag_holds("Bin 42");
+    tap();
+    TEST_ASSERT_EQUAL(1, s_ntyped);
+    TEST_ASSERT_EQUAL_STRING("Bin 42", s_typed[0]);
+}
+
 static void test_lookup_types_the_text_record(void)
 {
     start();
@@ -653,6 +692,21 @@ static void test_links_answers_go_back_to_the_asker(void)
     forget();
     app_core_tag_removed(&s_core, &TAG);
     ASSERT_ORIGIN(0, APP_ORIGIN_ALL);
+
+    /* A job from a local link (USB): its events to local links only, since the server looks
+     * jobs up by id and must not mistake one it never gave for one of its own. */
+    forget();
+    program_from(0, false, "");
+    ASSERT_LINES(2);
+    ASSERT_ORIGIN(0, 0);
+    ASSERT_ORIGIN(1, APP_ORIGIN_LOCAL);         /* waiting */
+    forget();
+    tap();
+    ASSERT_ORIGIN(0, APP_ORIGIN_LOCAL);         /* writing */
+    ASSERT_ORIGIN(1, APP_ORIGIN_LOCAL);         /* done */
+    forget();
+    app_core_tag_removed(&s_core, &TAG);
+    ASSERT_ORIGIN(0, APP_ORIGIN_ALL);           /* taps and removals are everyone's */
 
     /* A parse failure is answered the same way (the caller sets the origin). */
     proto_err_t err;
@@ -893,6 +947,7 @@ void run_app_core_tests(void)
     RUN_TEST(test_job_failures);
     RUN_TEST(test_reader_failure);
     RUN_TEST(test_lookup_types_the_text_record);
+    RUN_TEST(test_lookup_types_only_barcodes);
     RUN_TEST(test_lookup_of_a_tag_that_leaves_says_nothing);
     RUN_TEST(test_hid_setting);
     RUN_TEST(test_wipe);

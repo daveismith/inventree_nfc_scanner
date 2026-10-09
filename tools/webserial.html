@@ -217,7 +217,7 @@ if (typeof document !== 'undefined') {
     } else if (msg.evt === 'writing') {
       status(`Job ${msg.id}: writing ${msg.uid}, hold still`, 'warn');
     } else if (msg.evt === 'done') {
-      // This is where the plugin page would POST /api/barcode/link/ with msg.uid.
+      // This is where the plugin page POSTs msg.uid to its api/location/<pk>/link/.
       status(`Job ${msg.id}: done, UID ${msg.uid}${msg.protected ? ', protected' : ''}`, 'good');
     } else if (msg.evt === 'failed') {
       status(`Job ${msg.id}: ${msg.error}${msg.text ? ' (tag holds ' + msg.text + ')' : ''}`, 'bad');
