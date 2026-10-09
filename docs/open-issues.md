@@ -41,21 +41,9 @@ low = rough edge. Fixed items are listed at the end, briefly, for the record.
   programmed (the plugin cannot reach tags protected with an earlier password either: its list,
   "Tags protected with an earlier password").
 
-### 3. A stuck PN532 needs unplugging unless its reset pin is wired
-
-- Where: hardware, and `main/Kconfig.projbuild` `APP_NFC_RST_GPIO` (-1, not wired, on the
-  desk unit).
-- Scenario: the PN532 keeps its power through a software restart. Left in the middle of an
-  I2C exchange, it refuses its address until power is removed (seen on the bench: a restart
-  after a USB update cut an exchange short). The driver's bus reset does not reach it, and
-  the firmware cannot reset it. That cause is fixed (the reader stays idle until the restart),
-  but a brown-out or a crash mid-exchange can still leave it so.
-- Fix: wire RSTPD_N to a free GPIO and set `APP_NFC_RST_GPIO`; the driver already pulses it on
-  re-initialisation. Recommend it in the README's hardware table for new units.
-
 ## Low
 
-### 4. A `cancel` for a job the reader no longer has is answered `no_job`
+### 3. A `cancel` for a job the reader no longer has is answered `no_job`
 
 - Where: `components/app_core/app_core.c` `cmd_cancel`.
 - Scenario: the reader restarted, or the job already ended; the plugin cancels; the reader
@@ -64,14 +52,17 @@ low = rough edge. Fixed items are listed at the end, briefly, for the record.
   the server can end the job at once (the plugin's list, "A cancelled job the scanner no
   longer has").
 
-### 5. The trial-deadline restart ignores a running job
+### 4. The trial-deadline restart ignores a running job
 
 
 - Where: `main/ota.c` `confirm_deadline()` calls `esp_restart()` without checking
   `app_task_job_active()`; the updater's own restart does wait.
-- Fix: wait for the job as the updater does, bounded.
+- Scenario: it also restarts with the reader polling. A restart that cuts an I2C exchange
+  short can leave the PN532 refusing its address until the unit is unplugged (the chip keeps
+  its power through a restart, and the desk unit's module has no reset input on its header).
+- Fix: wait for the job as the updater does, bounded, and rest the reader before restarting.
 
-### 6. A tag lifted just before a job starts fails the job at once
+### 5. A tag lifted just before a job starts fails the job at once
 
 
 - Where: `main/app_task.c` offers the remembered tag to a new job while `s_tag_present` is
@@ -80,7 +71,7 @@ low = rough edge. Fixed items are listed at the end, briefly, for the record.
   instead of waiting for the next tag; over the network the job must be re-queued.
 - Fix: before offering a remembered tag to a new job, check presence once.
 
-### 7. Commands from one link affect another link's work
+### 6. Commands from one link affect another link's work
 
 
 - Where: `components/app_core/app_core.c` `cmd_cancel` checks no owner; `log` is allowed from
@@ -88,14 +79,14 @@ low = rough edge. Fixed items are listed at the end, briefly, for the record.
 - Fix: refuse `cancel` for a job another link started (or require the id), and add `log` to
   `needs_hands()`.
 
-### 8. Adding a network during a join tries another network first
+### 7. Adding a network during a join tries another network first
 
 
 - Where: `components/wifi_sta/wifi_sta.c` `wifi_sta_set_networks` disconnects; the disconnect is
   handled as a failed join, which `move_on()`s past the network just added.
 - Fix: mark the disconnect as deliberate so the policy restarts at the preferred network.
 
-### 9. A just-updated unit refuses another update, saying only that it cannot write
+### 8. A just-updated unit refuses another update, saying only that it cannot write
 
 - Where: `main/ota.c` `serial_begin` and `main/ota_net.c` (`esp_ota_begin` and
   `esp_https_ota_begin` return `ESP_ERR_OTA_ROLLBACK_INVALID_STATE` while the running image is
@@ -106,7 +97,7 @@ low = rough edge. Fixed items are listed at the end, briefly, for the record.
 - Fix: name the reason ("this firmware is still on trial; try again once it has confirmed
   itself") and say how long that can take.
 
-### 10. A release's `min_plugin` is set by hand and never checked
+### 9. A release's `min_plugin` is set by hand and never checked
 
 
 - Where: `MIN_PLUGIN` in `tools/make_release.py`; the plugin's `firmware.compatible` trusts it.
@@ -123,6 +114,14 @@ low = rough edge. Fixed items are listed at the end, briefly, for the record.
   get secure boot before it is trusted; see "Credentials and trust" in the plan.
 
 ## Fixed, for the record
+
+- **Closed, 2026-10-08: a stuck PN532 needs unplugging.** The PN532 keeps its power through
+  a restart, and one that cuts an I2C exchange short can leave it refusing its address until
+  power is removed. Updates over USB and the network rest the reader before they restart,
+  which covers the restarts a unit in use sees. Still exposed: a flash through the bootloader
+  (seen twice on the bench), the trial-deadline restart (item 4), crashes and brown-outs. No
+  firmware reset is possible on the desk unit: the module's header has RSTO, a reset output,
+  not RSTPD_N (README, "Hardware").
 
 - **Fixed before 1.0:** keyboard output types only InvenTree barcodes; the 1200-baud touch is
   development-only; a USB job's events stay off the network link; the simulator has the
