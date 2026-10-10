@@ -13,5 +13,5 @@ void sim_ota_init(sim_ota_restart_fn restart);
 app_err_t sim_ota_command(const app_cmd_t *cmd, uint32_t now_ms, const char **detail);
 bool sim_ota_active(void);
 void sim_ota_poll(uint32_t now_ms);
-/* The version the simulator runs: SIM_FW, or what the last update installed. */
+/* The version the simulator runs: SIM_FW (else version.txt's), or what the last update installed. */
 const char *sim_ota_fw(void);

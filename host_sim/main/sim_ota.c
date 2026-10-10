@@ -171,7 +171,7 @@ static void b_abort(void *ctx)
 void sim_ota_init(sim_ota_restart_fn restart)
 {
     s_slot = malloc(SLOT_SIZE);
-    snprintf(s_fw, sizeof(s_fw), "%s", getenv("SIM_FW") ? getenv("SIM_FW") : "sim");
+    snprintf(s_fw, sizeof(s_fw), "%s", getenv("SIM_FW") ? getenv("SIM_FW") : SIM_FW_DEFAULT);
     s_restart = restart;
     const ota_stream_backend_t backend = { .begin = b_begin, .write = b_write, .finish = b_finish, .abort = b_abort };
     ota_stream_init(&s_stream, &backend);
