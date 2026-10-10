@@ -26,6 +26,7 @@ const char *app_err_name(app_err_t err)
     case APP_ERR_VERIFY_FAILED:  return "verify_failed";
     case APP_ERR_NFC_ERROR:      return "nfc_error";
     case APP_ERR_NOT_ALLOWED:    return "not_allowed";
+    case APP_ERR_DOWNLOAD_FAILED: return "download_failed";
     }
     return "unknown";
 }

@@ -45,7 +45,7 @@
         "bad_json", "line_too_long", "unknown_cmd", "bad_arg", "busy", "no_job", "timeout",
         "cancelled", "wrong_tag_type", "multiple_tags", "not_blank", "auth_required",
         "auth_failed", "locked", "too_large", "tag_removed", "write_failed", "verify_failed",
-        "nfc_error", "not_allowed"
+        "nfc_error", "not_allowed", "download_failed"
       ]
     },
 
@@ -432,12 +432,19 @@
       "$ref": "#/$defs/net_status"
     },
     "evt_ota": {
+      "description": "An update's progress. A failure says why in `error`.",
       "required": ["evt", "state"],
       "properties": {
         "evt": { "const": "ota" },
         "state": { "enum": ["downloading", "restarting", "failed"] },
+        "error": {
+          "enum": ["download_failed", "cancelled", "timeout", "write_failed", "verify_failed", "bad_arg"]
+        },
         "detail": { "$ref": "#/$defs/detail" }
-      }
+      },
+      "if": { "properties": { "state": { "const": "failed" } } },
+      "then": { "required": ["error"] },
+      "else": { "not": { "required": ["error"] } }
     }
   }
 }

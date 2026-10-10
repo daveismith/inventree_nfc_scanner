@@ -76,10 +76,23 @@ static bool digest_matches(esp_https_ota_handle_t h)
     return memcmp(out, s_cmd.sha256, sizeof(out)) == 0;
 }
 
+/* Why fetching failed: the image was not one for this chip, the flash would not take it, or
+ * (anything else: the server, the connection, TLS) it could not be fetched. */
+static app_err_t fetch_error(esp_err_t err)
+{
+    if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
+        return APP_ERR_VERIFY_FAILED;
+    }
+    if ((err & ~0xff) == ESP_ERR_FLASH_BASE || err == ESP_ERR_OTA_PARTITION_CONFLICT) {
+        return APP_ERR_WRITE_FAILED;
+    }
+    return APP_ERR_DOWNLOAD_FAILED;
+}
+
 static void ota_task(void *arg)
 {
     (void)arg;
-    ota_announce("downloading", NULL);
+    ota_announce("downloading", APP_ERR_NONE, NULL);
 
     esp_http_client_config_t http = {
         .url = s_cmd.ota_url,
@@ -95,9 +108,11 @@ static void ota_task(void *arg)
     esp_https_ota_handle_t h = NULL;
     esp_err_t err = esp_https_ota_begin(&cfg, &h);
     const char *failure = NULL;
+    app_err_t code = APP_ERR_NONE;      /* what `failure` is, for a program */
     int written = 0;
     if (err != ESP_OK) {
         failure = esp_err_to_name(err);
+        code = fetch_error(err);
     } else {
         for (;;) {
             err = esp_https_ota_perform(h);
@@ -107,10 +122,13 @@ static void ota_task(void *arg)
         }
         if (err != ESP_OK) {
             failure = esp_err_to_name(err);
+            code = fetch_error(err);
         } else if (!esp_https_ota_is_complete_data_received(h)) {
             failure = "the image was cut short";
+            code = APP_ERR_DOWNLOAD_FAILED;
         } else if (!digest_matches(h)) {
             failure = "sha256 does not match";
+            code = APP_ERR_VERIFY_FAILED;
         }
         written = esp_https_ota_get_image_len_read(h);
         if (failure) {
@@ -119,6 +137,7 @@ static void ota_task(void *arg)
             err = esp_https_ota_finish(h);       /* checks the image and makes it the one to boot; frees h */
             if (err != ESP_OK) {
                 failure = esp_err_to_name(err);
+                code = err == ESP_ERR_OTA_VALIDATE_FAILED ? APP_ERR_VERIFY_FAILED : APP_ERR_WRITE_FAILED;
             }
         }
     }
@@ -126,7 +145,7 @@ static void ota_task(void *arg)
     memset(s_token, 0, sizeof(s_token));
     if (failure) {
         ESP_LOGE(TAG, "update failed: %s", failure);
-        ota_announce("failed", failure);
+        ota_announce("failed", code, failure);
         ota_net_release();
         vTaskDelete(NULL);
         return;

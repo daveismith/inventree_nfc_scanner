@@ -40,7 +40,8 @@ void ota_poll(void);
 bool ota_in_progress(void);
 
 /* Shared with the network part (ota_net.c). */
-void ota_announce(const char *state, const char *detail);
+/* An `ota` event. `error` says why an update failed, for a program; `detail`, for a person. */
+void ota_announce(const char *state, app_err_t error, const char *detail);
 void ota_restart_when_free(void);
 bool ota_net_claim(void);
 void ota_net_release(void);
