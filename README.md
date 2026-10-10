@@ -175,9 +175,7 @@ The mapping between lines and structs is `components/proto`; the behaviour is
 | --- | --- |
 | `tools/nfcprog.py` | The protocol from the command line: `info`, `program --host H --pk N`, `wipe`, `cancel`, `hid on\|off`, `log LEVEL`, `monitor`, `bootloader`, `net ...`, `ota URL --file IMAGE`, `update IMAGE` (over USB), `ndef`, `raw`. Needs pyserial. Passphrases and tokens are prompted for unless given as options, and never echoed. With two scanners connected it insists on `--port`. |
 | `tools/webserial.html` | The same from a browser (Chrome or Edge), standing in for the InvenTree plugin page. |
-| `tools/test_sim.py` | Runs `nfcprog.py` against the host simulator. |
 | `tools/fake_plugin.py` | A stand-in for the InvenTree plugin's `/sync`, with endpoints to queue commands, read what the reader reported, and drop answers at random. |
-| `tools/test_sync.py` | The network link end to end: the host simulator against `fake_plugin.py` (a job once, a lossy link, a server that comes and goes, a reader restart, long polling). |
 | `tools/sync_bridge.py` | Presents a USB scanner to the InvenTree plugin as a network scanner, speaking its `/sync` exchange; the reference client for the network firmware. |
 | `tools/hid_check.py` | Checks keyboard output: turns it on for one session and reads back what a tap types. |
 | `tools/make_release.py` | Packages a build as release assets with its manifest; the release workflow runs it. |
@@ -185,19 +183,27 @@ The mapping between lines and structs is `components/proto`; the behaviour is
 
 ## Tests
 
-Nothing below needs the board.
+Nothing below needs the board. The tests are in `tests/`, in pytest; build the two host
+programs they run first.
 
 ```sh
-# Unit tests: NDEF, PN532 frames, NTAG operations, protocol, state machine, the plugin
-# exchange, the Wi-Fi policy (each from the repository root)
-(cd host_test && idf.py --preview set-target linux && idf.py build && ./build/host_test.elf)
-
-# The firmware's logic as a host program on a pty, driven by the real harness; then the
-# same over its network link against tools/fake_plugin.py
-(cd host_sim && idf.py --preview set-target linux && idf.py build)
-python tools/test_sim.py
-python tools/test_sync.py
+(cd host_test && idf.py --preview set-target linux && idf.py build)   # the unit tests
+(cd host_sim && idf.py --preview set-target linux && idf.py build)    # the simulator
+pip install -r tests/requirements.txt
+python -m pytest                     # everything (about a minute)
+python -m pytest tests/test_sim.py   # one module; -k to pick tests by name
 ```
+
+| Module | What |
+| --- | --- |
+| `tests/test_unit.py` | The C unit tests in `host_test/` (NDEF, PN532 frames, NTAG operations, the protocol, the state machine, the plugin exchange, the Wi-Fi policy), each reported as a test of its own. |
+| `tests/test_sim.py` | The firmware's logic end to end through the simulator, driven by `nfcprog.py`: programming, reading back, protection, wipe, a torn write, refusals, malformed input, updates over USB. Also that `webserial.html` and `nfcprog.py` build the same NDEF (needs Node.js). |
+| `tests/test_sync.py` | The network link end to end: the simulator against `tools/fake_plugin.py` (a job once, a lossy link, a backlog, a server that comes and goes, remote refusals, a reader restart, long polling). |
+| `tests/test_make_release.py` | `tools/make_release.py`: what it refuses to package, and the manifest. |
+
+Each test starts its own simulator and fake plugin. `HOST_TEST` and `HOST_SIM` name other
+builds; a test whose program is not built is skipped (CI sets `REQUIRE_BUILDS`, which fails it
+instead). CI publishes the results as the **Test results** check run.
 
 The simulator reports the version in `version.txt` (`SIM_FW` overrides it), and takes `!`
 lines to move its simulated tag (`!tag ntag215`, `!remove`, `!tear N`, ...; see

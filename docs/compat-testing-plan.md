@@ -23,7 +23,7 @@ notice until a scanner in the field misbehaved.
 
 The host simulator (`host_sim`) already runs the firmware's state machine, protocol, tag logic
 and network link on Linux, and with `SIM_SYNC_URL`, `SIM_TOKEN` and `SIM_READER` it acts as a
-network scanner against any `/sync`. `tools/test_sync.py` drives it against the fake plugin. The
+network scanner against any `/sync`. `tests/test_sync.py` drives it against the fake plugin. The
 same scenarios against a real InvenTree with the plugin at a chosen version are the contract
 test.
 
