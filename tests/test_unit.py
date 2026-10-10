@@ -2,7 +2,8 @@
 machine, the plugin exchange, the Wi-Fi policy), each reported as a test of its own.
 
 host_test.elf runs them all with Unity, which prints `file:line:name:PASS` (or `:FAIL: why`,
-`:IGNORE`) per test; the binary is run once, when the tests are collected.
+`:IGNORE`) per test; the binary is run once, when the tests are collected. A name two tests
+share gets the line that runs each: `test_wipe@123`.
 """
 
 import os
@@ -20,19 +21,23 @@ LINE = re.compile(r"^(?P<where>[^:\s]+:\d+):(?P<name>\w+):(?P<status>PASS|FAIL|I
 
 def results():
     if not (ELF.is_file() and os.access(ELF, os.X_OK)):
-        return None, f"{ELF} is not built (see tests/conftest.py)"
+        return None, None, f"{ELF} is not built (see tests/conftest.py)"
     run = subprocess.run([str(ELF)], capture_output=True, text=True, timeout=300)
+    lines = [m for m in (LINE.match(ln.strip()) for ln in run.stdout.splitlines()) if m]
+    names = [m["name"] for m in lines]
     found = {}
-    for line in run.stdout.splitlines():
-        m = LINE.match(line.strip())
-        if m:
-            found[m["name"]] = (m["status"], m["why"] or "", m["where"])
+    for m in lines:
+        # Two groups may each have a test of the same name: those are told apart by the line
+        # of test_main.c that runs them.
+        key = m["name"] if names.count(m["name"]) == 1 else f"{m['name']}@{m['where'].rsplit(':', 1)[1]}"
+        found[key] = (m["status"], m["why"] or "", m["where"])
     if not found:
-        return None, f"{ELF} reported no tests (exit {run.returncode}):\n{run.stdout[-2000:]}"
-    return found, ""
+        return None, None, f"{ELF} reported no tests (exit {run.returncode}):\n{run.stdout[-2000:]}"
+    total = re.search(r"^(\d+) Tests \d+ Failures \d+ Ignored", run.stdout, re.M)
+    return found, int(total[1]) if total else None, ""
 
 
-RESULTS, PROBLEM = results()
+RESULTS, UNITY_TOTAL, PROBLEM = results()
 
 
 def test_the_unit_tests_ran():
@@ -40,7 +45,8 @@ def test_the_unit_tests_ran():
         if os.environ.get("REQUIRE_BUILDS"):
             pytest.fail(PROBLEM)
         pytest.skip(PROBLEM)
-    assert len(RESULTS) > 0
+    # Each of Unity's tests is one here: none lost to a name two of them share.
+    assert len(RESULTS) == UNITY_TOTAL, f"Unity ran {UNITY_TOTAL} tests; {len(RESULTS)} are reported here"
 
 
 @pytest.mark.parametrize("name", sorted(RESULTS or {}))
