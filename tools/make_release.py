@@ -9,7 +9,7 @@ with esptool from offset 0. The manifest describes both, and is what the InvenTr
 reads to decide whether, and to which scanners, a release may go:
 
     {"name": "inventree_nfc_scanner", "version": "0.2.0", "target": "esp32s3", "idf": "v6.1",
-     "proto": 1, "settings_version": 1, "min_plugin": "0.1.0", "git_sha": "...",
+     "proto": 1, "settings_version": 1, "min_plugin": "1.0.0", "git_sha": "...",
      "app": {"file": "...", "size": 1234, "sha256": "...", "offset": 131072},
      "merged": {"file": "...", "size": 1234, "sha256": "...", "offset": 0}}
 
