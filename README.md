@@ -88,8 +88,11 @@ The version is the one line in `version.txt`. Pushing a tag `v<that version>` (o
 `v<version>-rc.N` for a pre-release, after setting `version.txt` to match) runs
 `.github/workflows/release.yaml`: it builds the production configuration and publishes a
 GitHub release with the app image, a merged image for flashing a blank board from offset 0,
-and `manifest.json`, which the plugin reads (see `tools/make_release.py`). A tag that does not
-match `version.txt` fails the workflow. CI packages every push the same way without publishing.
+and `manifest.json`, which the plugin reads (see `tools/make_release.py`), and the simulator
+of that version (below) for x86_64 and arm64 Linux, `inventree_nfc_scanner-<version>-sim-linux-<cpu>`,
+which the plugin's tests run against. A tag that does not match `version.txt` fails the workflow.
+CI packages every pull request, and `main`, the same way without publishing, and keeps both
+simulators as artifacts (`host-sim-linux-x86_64`, `host-sim-linux-arm64`).
 
 ```sh
 echo 0.2.0 > version.txt && git commit -am "0.2.0" && git tag v0.2.0 && git push --follow-tags
@@ -195,6 +198,11 @@ Nothing below needs the board.
 python tools/test_sim.py
 python tools/test_sync.py
 ```
+
+The simulator reports the version in `version.txt` (`SIM_FW` overrides it), and takes `!`
+lines to move its simulated tag (`!tag ntag215`, `!remove`, `!tear N`, ...; see
+`host_sim/main/sim_main.c`). It needs only the C library (glibc 2.39 or later, as in Ubuntu
+24.04).
 
 The NTAG tests run against a simulated tag (`host_test/components/sim_ntag`) that models
 password protection, the one-time-programmable pages and a tag leaving the field. Among

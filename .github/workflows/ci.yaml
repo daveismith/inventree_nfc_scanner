@@ -1,11 +1,19 @@
 # Builds the firmware in both configurations and runs everything that needs no board: the
 # host unit tests, the simulator's own checks, and the network link against the fake plugin.
+# The simulator (host_sim) is kept as an artifact for each CPU, for the InvenTree plugin's
+# tests to run against the firmware's own code (its docs/test-suite-plan.md, step 5).
 #
 # Actions are pinned by commit hash; the comment after each is the release it maps to.
 
 name: CI
 
-on: ["push", "pull_request"]
+# Pull requests, and main once merged: a branch with a pull request would otherwise run
+# twice, for the push and for the pull request. Any other branch: Actions → Run workflow.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,9 +21,10 @@ permissions:
 jobs:
   firmware:
     name: Firmware (ESP32-S3)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     container:
-      image: espressif/idf:v6.1
+      # Google's mirror of Docker Hub: no Docker Hub pull limits.
+      image: mirror.gcr.io/espressif/idf:v6.1
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,9 +49,10 @@ jobs:
 
   host:
     name: Host tests and simulator
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     container:
-      image: espressif/idf:v6.1
+      # Google's mirror of Docker Hub: no Docker Hub pull limits.
+      image: mirror.gcr.io/espressif/idf:v6.1
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,3 +71,32 @@ jobs:
           (cd host_sim && idf.py --preview set-target linux build)
           python tools/test_sim.py
           python tools/test_sync.py
+      - name: Keep the simulator
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-sim-linux-x86_64
+          path: host_sim/build/host_sim.elf
+          if-no-files-found: error
+
+  sim-arm64:
+    # The same simulator for arm64 Linux: what a test container runs on an Apple Silicon Mac.
+    name: Simulator (arm64)
+    runs-on: ubuntu-26.04-arm
+    container:
+      image: mirror.gcr.io/espressif/idf:v6.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build, and its checks
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          pip install pyserial
+          (cd host_sim && idf.py --preview set-target linux build)
+          python tools/test_sim.py
+      - name: Keep the simulator
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-sim-linux-arm64
+          path: host_sim/build/host_sim.elf
+          if-no-files-found: error
