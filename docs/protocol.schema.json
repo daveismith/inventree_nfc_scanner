@@ -1,0 +1,443 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/daveismith/inventree_nfc_scanner/docs/protocol.schema.json",
+  "title": "InvenTree NFC scanner serial protocol, version 1",
+  "description": "One line of the protocol in docs/protocol.md: a command (host to device) or a message (device to host). Validate against #/$defs/command or #/$defs/message when the direction is known. Over the network each object also carries `seq`. Lengths are given in characters; the device counts bytes, so a non-ASCII string can be refused below its maxLength. Version 1 exactly: hosts should still ignore fields and events they do not know.",
+  "oneOf": [
+    { "$ref": "#/$defs/command" },
+    { "$ref": "#/$defs/message" }
+  ],
+  "$defs": {
+    "id": {
+      "description": "Chosen by the host; echoed in the answer, and a job's id in its events.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "seq": {
+      "description": "Added over the network only, by the sync exchange.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "hex8": { "type": "string", "pattern": "^[0-9A-Fa-f]{8}$" },
+    "hex4": { "type": "string", "pattern": "^[0-9A-Fa-f]{4}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+    "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 600000 },
+    "url": { "type": "string", "pattern": "^https?://" },
+    "uid": {
+      "description": "A tag's UID, upper-case hex.",
+      "type": "string",
+      "pattern": "^([0-9A-F]{2}){1,10}$"
+    },
+    "tag_type": { "enum": ["ntag213", "ntag215", "ntag216", "unknown"] },
+    "reader": {
+      "description": "nfc- and, on a device, the MAC address in lower-case hex (nfc-34b7da52a084). The host simulator's is nfc-sim000000. An opaque id to a host.",
+      "type": "string",
+      "pattern": "^nfc-[0-9a-z]+$"
+    },
+    "detail": {
+      "description": "For people and logs; not to be parsed.",
+      "type": "string"
+    },
+    "uint": { "type": "integer", "minimum": 0 },
+    "error": {
+      "enum": [
+        "bad_json", "line_too_long", "unknown_cmd", "bad_arg", "busy", "no_job", "timeout",
+        "cancelled", "wrong_tag_type", "multiple_tags", "not_blank", "auth_required",
+        "auth_failed", "locked", "too_large", "tag_removed", "write_failed", "verify_failed",
+        "nfc_error", "not_allowed"
+      ]
+    },
+
+    "command": {
+      "description": "A line from host to device.",
+      "type": "object",
+      "required": ["cmd"],
+      "properties": {
+        "cmd": { "type": "string" },
+        "id": { "$ref": "#/$defs/id" },
+        "seq": { "$ref": "#/$defs/seq" }
+      },
+      "oneOf": [
+        { "$ref": "#/$defs/cmd_info" },
+        { "$ref": "#/$defs/cmd_program" },
+        { "$ref": "#/$defs/cmd_wipe" },
+        { "$ref": "#/$defs/cmd_cancel" },
+        { "$ref": "#/$defs/cmd_hid" },
+        { "$ref": "#/$defs/cmd_log" },
+        { "$ref": "#/$defs/cmd_bootloader" },
+        { "$ref": "#/$defs/cmd_debug" },
+        { "$ref": "#/$defs/cmd_net" },
+        { "$ref": "#/$defs/cmd_ota" },
+        { "$ref": "#/$defs/cmd_ota_begin" },
+        { "$ref": "#/$defs/cmd_ota_data" },
+        { "$ref": "#/$defs/cmd_ota_end" }
+      ],
+      "unevaluatedProperties": false
+    },
+    "cmd_info": {
+      "properties": { "cmd": { "const": "info" } }
+    },
+    "cmd_program": {
+      "required": ["id", "ndef"],
+      "properties": {
+        "cmd": { "const": "program" },
+        "ndef": {
+          "description": "The whole NDEF message, hex: at most 888 bytes.",
+          "type": "string",
+          "pattern": "^([0-9A-Fa-f]{2}){1,888}$"
+        },
+        "overwrite": { "type": "boolean" },
+        "pwd": { "$ref": "#/$defs/hex8" },
+        "pack": { "$ref": "#/$defs/hex4" },
+        "old_pwd": { "$ref": "#/$defs/hex8" },
+        "timeout_ms": { "$ref": "#/$defs/timeout_ms" }
+      },
+      "dependentRequired": { "pack": ["pwd"] }
+    },
+    "cmd_wipe": {
+      "required": ["id"],
+      "properties": {
+        "cmd": { "const": "wipe" },
+        "pwd": { "$ref": "#/$defs/hex8" },
+        "timeout_ms": { "$ref": "#/$defs/timeout_ms" }
+      }
+    },
+    "cmd_cancel": {
+      "properties": { "cmd": { "const": "cancel" } }
+    },
+    "cmd_hid": {
+      "required": ["enabled"],
+      "properties": {
+        "cmd": { "const": "hid" },
+        "enabled": { "type": "boolean" },
+        "persist": { "type": "boolean" }
+      }
+    },
+    "cmd_log": {
+      "required": ["level"],
+      "properties": {
+        "cmd": { "const": "log" },
+        "level": { "enum": ["off", "error", "warn", "info", "debug"] }
+      }
+    },
+    "cmd_bootloader": {
+      "properties": { "cmd": { "const": "bootloader" } }
+    },
+    "cmd_debug": {
+      "description": "Development builds only.",
+      "required": ["action"],
+      "properties": {
+        "cmd": { "const": "debug" },
+        "action": { "enum": ["crash", "hang", "nousb"] }
+      }
+    },
+    "cmd_net": {
+      "description": "Network builds only. No action: report.",
+      "properties": {
+        "cmd": { "const": "net" },
+        "action": { "enum": ["join", "forget", "server", "poll"] },
+        "ssid": { "type": "string", "maxLength": 32 },
+        "psk": {
+          "description": "Empty for an open network.",
+          "type": "string",
+          "anyOf": [{ "maxLength": 0 }, { "minLength": 8, "maxLength": 64 }]
+        },
+        "url": { "$ref": "#/$defs/url", "maxLength": 160 },
+        "token": { "type": "string", "maxLength": 96 },
+        "poll_ms": { "type": "integer", "minimum": 100, "maximum": 60000 },
+        "wait_s": { "type": "integer", "minimum": 0, "maximum": 300 },
+        "enabled": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["action"], "properties": { "action": { "enum": ["join", "forget"] } } },
+          "then": { "required": ["ssid"], "properties": { "ssid": { "minLength": 1 } } }
+        },
+        {
+          "if": { "required": ["action"], "properties": { "action": { "const": "server" } } },
+          "then": { "required": ["url"] }
+        },
+        {
+          "if": { "required": ["action"], "properties": { "action": { "const": "poll" } } },
+          "then": { "anyOf": [{ "required": ["poll_ms"] }, { "required": ["wait_s"] }] }
+        }
+      ]
+    },
+    "cmd_ota": {
+      "description": "Network builds only: fetch an image over HTTP.",
+      "required": ["url", "sha256"],
+      "properties": {
+        "cmd": { "const": "ota" },
+        "url": { "$ref": "#/$defs/url", "maxLength": 256 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "cmd_ota_begin": {
+      "required": ["id", "size", "sha256"],
+      "properties": {
+        "cmd": { "const": "ota_begin" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "cmd_ota_data": {
+      "required": ["id", "at", "data"],
+      "properties": {
+        "cmd": { "const": "ota_data" },
+        "at": { "type": "integer", "minimum": 0, "maximum": 16777216 },
+        "data": {
+          "description": "Standard base64 with padding, of 1 to 768 bytes.",
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 1024,
+          "pattern": "^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$"
+        }
+      }
+    },
+    "cmd_ota_end": {
+      "required": ["id"],
+      "properties": { "cmd": { "const": "ota_end" } }
+    },
+
+    "message": {
+      "description": "A line from device to host: an answer (rsp) or an event (evt).",
+      "type": "object",
+      "properties": {
+        "seq": { "$ref": "#/$defs/seq" }
+      },
+      "oneOf": [
+        { "$ref": "#/$defs/rsp" },
+        { "$ref": "#/$defs/evt_hello" },
+        { "$ref": "#/$defs/evt_waiting" },
+        { "$ref": "#/$defs/evt_writing" },
+        { "$ref": "#/$defs/evt_done" },
+        { "$ref": "#/$defs/evt_failed" },
+        { "$ref": "#/$defs/evt_tag" },
+        { "$ref": "#/$defs/evt_tag_removed" },
+        { "$ref": "#/$defs/evt_error" },
+        { "$ref": "#/$defs/evt_log" },
+        { "$ref": "#/$defs/evt_net" },
+        { "$ref": "#/$defs/evt_ota" }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "rsp": {
+      "description": "The one answer every command gets, on the link that sent it. Under the name given, even for an unknown command (cut to 23 bytes).",
+      "required": ["rsp", "ok"],
+      "properties": {
+        "rsp": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "id": { "$ref": "#/$defs/id" },
+        "error": { "$ref": "#/$defs/error" },
+        "detail": { "$ref": "#/$defs/detail" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "ok": { "const": false } } },
+          "then": { "required": ["error"] },
+          "else": { "not": { "required": ["error"] } }
+        },
+        {
+          "if": { "properties": { "rsp": { "const": "info" }, "ok": { "const": true } } },
+          "then": { "$ref": "#/$defs/info" }
+        },
+        {
+          "if": { "properties": { "rsp": { "const": "hid" }, "ok": { "const": true } } },
+          "then": {
+            "required": ["enabled"],
+            "properties": { "enabled": { "description": "Whether a tap types now.", "type": "boolean" } }
+          }
+        },
+        {
+          "if": { "properties": { "rsp": { "const": "net" }, "ok": { "const": true } } },
+          "then": { "$ref": "#/$defs/net_status" }
+        }
+      ]
+    },
+    "info": {
+      "required": ["proto", "fw", "idf", "pn532", "state", "job", "tag", "hid", "buzzer", "reset", "crash", "uptime_ms", "net"],
+      "properties": {
+        "proto": { "const": 1 },
+        "fw": { "type": "string" },
+        "reader": { "$ref": "#/$defs/reader" },
+        "idf": { "type": "string" },
+        "pn532": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["ic", "ver"],
+              "properties": {
+                "ic": { "$ref": "#/$defs/uint" },
+                "ver": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "state": { "enum": ["idle", "waiting", "nfc_error"] },
+        "job": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
+        "tag": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/uid" }] },
+        "hid": { "type": "boolean" },
+        "buzzer": { "type": "boolean" },
+        "reset": {
+          "enum": [
+            "poweron", "external", "software", "panic", "int_wdt", "task_wdt", "wdt", "deepsleep",
+            "brownout", "usb", "jtag", "power_glitch", "cpu_lockup", "unknown"
+          ]
+        },
+        "crash": { "type": ["string", "null"] },
+        "uptime_ms": { "$ref": "#/$defs/uint" },
+        "net": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "object", "$ref": "#/$defs/net_status", "unevaluatedProperties": false }
+          ]
+        }
+      }
+    },
+    "net_status": {
+      "description": "The network side: the answer to net (flat), the net event, and info.net. Never the passphrase or the token.",
+      "required": ["enabled", "wifi", "ssid", "ip", "url", "token", "reader", "link", "last_status", "poll_ms", "wait_s", "queued", "dropped"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "wifi": { "enum": ["off", "no_network", "connecting", "connected"] },
+        "ssid": { "type": ["string", "null"] },
+        "ip": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] },
+        "token": { "description": "Whether a token is set.", "type": "boolean" },
+        "reader": { "$ref": "#/$defs/reader" },
+        "link": { "enum": ["off", "no_wifi", "idle", "ok", "unreachable", "refused", "error"] },
+        "last_status": { "description": "The last HTTP status; 0 before the first call, -1 when the server could not be reached.", "type": "integer", "minimum": -1 },
+        "poll_ms": { "$ref": "#/$defs/uint" },
+        "wait_s": { "$ref": "#/$defs/uint" },
+        "queued": { "$ref": "#/$defs/uint" },
+        "dropped": { "$ref": "#/$defs/uint" }
+      }
+    },
+
+    "evt_hello": {
+      "description": "To a link that has just opened.",
+      "required": ["evt", "proto", "fw"],
+      "properties": {
+        "evt": { "const": "hello" },
+        "proto": { "const": 1 },
+        "fw": { "type": "string" },
+        "reader": { "$ref": "#/$defs/reader" }
+      }
+    },
+    "evt_waiting": {
+      "required": ["evt", "id", "timeout_ms"],
+      "properties": {
+        "evt": { "const": "waiting" },
+        "id": { "$ref": "#/$defs/id" },
+        "timeout_ms": { "$ref": "#/$defs/timeout_ms" }
+      }
+    },
+    "evt_writing": {
+      "required": ["evt", "id", "uid"],
+      "properties": {
+        "evt": { "const": "writing" },
+        "id": { "$ref": "#/$defs/id" },
+        "uid": { "$ref": "#/$defs/uid" }
+      }
+    },
+    "evt_done": {
+      "required": ["evt", "id", "uid", "type", "protected"],
+      "properties": {
+        "evt": { "const": "done" },
+        "id": { "$ref": "#/$defs/id" },
+        "uid": { "$ref": "#/$defs/uid" },
+        "type": { "$ref": "#/$defs/tag_type" },
+        "protected": { "type": "boolean" }
+      }
+    },
+    "evt_failed": {
+      "description": "A job's end, when it did not succeed. text and uri: what a not_blank tag already holds.",
+      "required": ["evt", "id", "error"],
+      "properties": {
+        "evt": { "const": "failed" },
+        "id": { "$ref": "#/$defs/id" },
+        "error": {
+          "enum": [
+            "timeout", "cancelled", "wrong_tag_type", "multiple_tags", "not_blank", "auth_required",
+            "auth_failed", "locked", "too_large", "tag_removed", "write_failed", "verify_failed",
+            "nfc_error"
+          ]
+        },
+        "detail": { "$ref": "#/$defs/detail" },
+        "uid": { "$ref": "#/$defs/uid" },
+        "text": { "type": "string" },
+        "uri": { "type": "string", "maxLength": 255 }
+      }
+    },
+    "evt_tag": {
+      "description": "A tap, with no job waiting; or more than one tag at once.",
+      "properties": { "evt": { "const": "tag" } },
+      "required": ["evt"],
+      "oneOf": [
+        {
+          "required": ["uid", "type"],
+          "properties": {
+            "uid": { "$ref": "#/$defs/uid" },
+            "type": { "$ref": "#/$defs/tag_type" },
+            "text": { "type": "string" },
+            "uri": { "type": "string", "maxLength": 255 },
+            "protected": { "type": "boolean" },
+            "detail": { "$ref": "#/$defs/detail" }
+          }
+        },
+        {
+          "required": ["error"],
+          "not": { "required": ["uid"] },
+          "properties": {
+            "error": { "const": "multiple_tags" },
+            "detail": { "$ref": "#/$defs/detail" }
+          }
+        }
+      ]
+    },
+    "evt_tag_removed": {
+      "required": ["evt", "uid"],
+      "properties": {
+        "evt": { "const": "tag_removed" },
+        "uid": { "$ref": "#/$defs/uid" }
+      }
+    },
+    "evt_error": {
+      "description": "A line that could not be read as a command.",
+      "required": ["evt", "error"],
+      "properties": {
+        "evt": { "const": "error" },
+        "error": { "enum": ["bad_json", "line_too_long"] },
+        "detail": { "$ref": "#/$defs/detail" }
+      }
+    },
+    "evt_log": {
+      "description": "USB only, once log has set a level.",
+      "required": ["evt", "lvl"],
+      "properties": {
+        "evt": { "const": "log" },
+        "lvl": { "enum": ["E", "W", "I", "D", "V", "?"] },
+        "tag": { "type": "string" },
+        "msg": { "type": "string" }
+      }
+    },
+    "evt_net": {
+      "description": "USB only: the network side changed state.",
+      "required": ["evt"],
+      "properties": { "evt": { "const": "net" } },
+      "$ref": "#/$defs/net_status"
+    },
+    "evt_ota": {
+      "required": ["evt", "state"],
+      "properties": {
+        "evt": { "const": "ota" },
+        "state": { "enum": ["downloading", "restarting", "failed"] },
+        "detail": { "$ref": "#/$defs/detail" }
+      }
+    }
+  }
+}
