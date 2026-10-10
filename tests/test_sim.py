@@ -274,7 +274,7 @@ def test_an_image_that_is_not_the_one_named_is_refused(sim, image):
     finally:
         link.close()
     assert {"rsp": "ota_end", "ok": False, "id": 9, "error": "verify_failed", "detail": "sha256 does not match"} in out
-    assert {"evt": "ota", "state": "failed", "detail": "sha256 does not match"} in out
+    assert {"evt": "ota", "state": "failed", "error": "verify_failed", "detail": "sha256 does not match"} in out
     code, out = sim.nfcprog("info")
     assert out[-1].get("state") == "idle", "nothing restarted"
 
@@ -295,6 +295,7 @@ def test_no_job_during_an_update_and_a_piece_out_of_order_ends_it(sim, image):
         link.send(json.dumps({"cmd": "ota_data", "id": 10, "at": 768, "data": piece}))
         out = link.read(3, until=answer_to("ota_data"))
         assert {"rsp": "ota_data", "ok": False, "id": 10, "error": "bad_arg", "detail": "at: expected 0"} in out
+        assert {"evt": "ota", "state": "failed", "error": "bad_arg", "detail": "at: expected 0"} in out
         link.send('{"cmd":"ota_end","id":10}')
         out = link.read(3, until=answer_to("ota_end"))
         assert out and out[0].get("error") == "no_job", "nothing is left of it"
