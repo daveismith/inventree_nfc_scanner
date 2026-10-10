@@ -21,6 +21,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import jsonschema
 import pytest
 import serial
 
@@ -29,6 +30,19 @@ TOOLS = ROOT / "tools"
 sys.path.insert(0, str(TOOLS))
 
 UID = "04A1B2C3D4E5F6"  # the simulated tag's
+
+# docs/protocol.schema.json: everything the device sends is held to it.
+_SCHEMA = json.loads((ROOT / "docs" / "protocol.schema.json").read_text())
+_MESSAGE = jsonschema.Draft202012Validator(
+    {"$schema": _SCHEMA["$schema"], "$defs": _SCHEMA["$defs"], "$ref": "#/$defs/message"}
+)
+
+
+def check_message(obj):
+    """Fail the test if `obj`, a line from the device, is not a message as the schema has it."""
+    errors = sorted(_MESSAGE.iter_errors(obj), key=lambda e: list(e.path))
+    if errors:
+        pytest.fail(f"not a protocol message: {json.dumps(obj)}: {errors[0].message}")
 
 
 def built(env: str, default: Path) -> Path:
@@ -73,6 +87,8 @@ class Link:
                 raw, self.buf = self.buf.split(b"\n", 1)
                 if raw.strip():
                     out.append(json.loads(raw))
+                    if "sim" not in out[-1]:        # the simulator's own answers to '!' lines
+                        check_message(out[-1])
                     if until and until(out[-1]):
                         return out
         return out
@@ -193,7 +209,10 @@ class FakePlugin:
             return json.loads(r.read() or b"null")
 
     def log(self):
-        return self.http("GET", "/log")
+        log = self.http("GET", "/log")
+        for m in log:
+            check_message({k: v for k, v in m.items() if k != "boot"})  # `boot` is the fake's
+        return log
 
     def state(self):
         return self.http("GET", "/state")
