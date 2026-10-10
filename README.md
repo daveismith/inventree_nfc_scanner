@@ -124,47 +124,15 @@ immediate `rsp`; a job's progress follows as `evt` lines.
 < {"evt":"done","id":7,"uid":"04A1B2C3D4E5F6","type":"ntag215","protected":true}
 ```
 
-| Command | Fields |
-| --- | --- |
-| `info` | |
-| `program` | `id`, `ndef` (hex of the whole NDEF message), `overwrite`, `pwd` (8 hex), `pack` (4 hex), `old_pwd`, `timeout_ms` |
-| `wipe` | `id`, `pwd`: empty the tag and remove its password |
-| `cancel` | `id` (optional) |
-| `hid` | `enabled`, `persist`: without `persist` it lasts until the port closes |
-| `log` | `level`: `off`, `error`, `warn`, `info`, `debug` |
-| `bootloader` | |
-| `net` | Network builds, USB only. No fields: report. `action`: `join` (`ssid`, `psk`), `forget` (`ssid`), `server` (`url`, `token`), `poll` (`poll_ms`, `wait_s`); `enabled` with or without an action. See docs/network-transport-plan.md |
-| `ota` | Network builds. `url` of a firmware image and its `sha256`, both required; progress comes as `ota` events and the device restarts into the new image once no job is running. From the network the image must be on the plugin's own server |
-| `ota_begin` | USB only, any build. `id`, `size` and `sha256` of an image about to be sent. `busy` mid-job or while another update runs |
-| `ota_data` | `id`, `at` (where the piece goes: where the last one ended) and `data`, base64 of at most 768 bytes. Each is answered; a piece out of order ends the update |
-| `ota_end` | `id`. The image is checked (size, sha256, a valid image for this chip) and the device restarts into it on trial; `verify_failed` otherwise. An update also ends when the port closes or after 30 s with nothing sent |
+Commands: `info`, `program`, `wipe`, `cancel`, `hid`, `log`, `bootloader`, `net` and `ota`
+(network builds), and `ota_begin`/`ota_data`/`ota_end` (an update over USB). The same
+objects are carried over the network in the plugin's `sync/` exchange. The full
+specification, every command, answer, event, field and error, is
+[docs/protocol.md](docs/protocol.md).
 
-A command carries an origin: its `rsp` goes back to the link that sent it (the USB page, or
-the plugin over the network), events go to every link. From the network, `bootloader`,
-`debug`, `net`, `hid` and the three `ota_` commands answer `not_allowed`. Closing the USB port cancels a job it started.
-A command that cannot be read is answered as a `rsp` under the name given, with
-`unknown_cmd`; a line that is not a command object at all gets an `error` event.
-
-`hello` (sent when the port opens) and `info` carry `fw`, the firmware version, and `reader`,
-the scanner's id (`nfc-` and its MAC address), the same id it uses over the network. The
-plugin knows a scanner by it, whether it is plugged in or on Wi-Fi.
-
-Events: `hello`, `waiting`, `writing`, `done`, `failed`, `tag`, `tag_removed`, `error`, `log`,
-`ota` (an update's progress: `downloading`, `restarting`, `failed` with `detail`), and in
-network builds `net` (the link changed state).
-
-Errors: `bad_json`, `line_too_long`, `unknown_cmd`, `bad_arg`, `busy`, `no_job`, `timeout`,
-`cancelled`, `wrong_tag_type`, `multiple_tags`, `not_blank`, `auth_required`, `auth_failed`,
-`locked`, `too_large`, `tag_removed`, `write_failed`, `verify_failed`, `nfc_error`,
-`not_allowed` (not from this link).
-
-One job at a time. A tag already on the reader when a job starts is used at once. A tag
-pulled away mid-write is left holding an empty, valid message. `not_blank` reports the text
-and URI already on the tag so the page can ask before overwriting. After `done`, the page
-links the UID to the location through the plugin's `api/location/<pk>/link/`, which, unlike
-InvenTree's own `/api/barcode/link/`, moves a barcode another item already holds (a tag
-re-programmed for another bin). A tap reports a tag's URI only up to 255 characters once its
-prefix is expanded; a longer base URL programs fine, but taps then report no `uri`.
+After `done`, the plugin's page links the UID to the location through the plugin's
+`api/location/<pk>/link/`, which, unlike InvenTree's own `/api/barcode/link/`, moves a
+barcode another item already holds (a tag re-programmed for another bin).
 
 The mapping between lines and structs is `components/proto`; the behaviour is
 `components/app_core`.
