@@ -60,3 +60,8 @@ Desktop.ini
 
 # The flash hook remembers the board it last sent to download mode
 .board-serial
+
+# pytest results (tests/)
+test-results/
+.pytest_cache/
+__pycache__/

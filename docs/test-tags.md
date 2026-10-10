@@ -1,7 +1,7 @@
 # Test tags
 
 The set of NFC tags used to check the scanner on real hardware, and what each one should
-make it do. The host tests (`host_test/`, `tools/test_sim.py`) cover the same behaviour
+make it do. The host tests (`host_test/`, `tests/test_sim.py`) cover the same behaviour
 against a simulated tag; this is the part only real tags and a real PN532 can confirm.
 
 Run on the board on 2026-10-04: every tag in the first table read as expected, all 26 checks

@@ -1,5 +1,6 @@
-# Builds the firmware in both configurations and runs everything that needs no board: the
-# host unit tests, the simulator's own checks, and the network link against the fake plugin.
+# Builds the firmware in both configurations and runs everything that needs no board (tests/,
+# in pytest): the host unit tests, the simulator driven through nfcprog.py, the network link
+# against the fake plugin, and the release packaging. Results are published as one check run.
 # The simulator (host_sim) is kept as an artifact for each CPU, for the InvenTree plugin's
 # tests to run against the firmware's own code (its docs/test-suite-plan.md, step 5).
 #
@@ -56,21 +57,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Unit tests (linux target)
+      - name: Build the unit tests and the simulator (linux target)
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          cd host_test
-          idf.py --preview set-target linux build
-          ./build/host_test.elf
-      - name: Simulator checks, and the network link against the fake plugin
-        shell: bash
-        run: |
-          . "$IDF_PATH/export.sh"
-          pip install pyserial
+          (cd host_test && idf.py --preview set-target linux build)
           (cd host_sim && idf.py --preview set-target linux build)
-          python tools/test_sim.py
-          python tools/test_sync.py
+      - name: Test
+        # tests/: the unit tests one by one, the simulator driven through nfcprog.py, the
+        # network link against tools/fake_plugin.py, and tools/make_release.py.
+        shell: bash
+        env:
+          REQUIRE_BUILDS: "1"
+        run: |
+          . "$IDF_PATH/export.sh"
+          pip install -r tests/requirements.txt
+          python -m pytest --junitxml=test-results/junit-host-x86_64.xml -o junit_suite_name="host, x86_64"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: results-x86_64
+          path: test-results/
+          retention-days: 14
       - name: Keep the simulator
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -87,16 +95,54 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Build, and its checks
+      - name: Build
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
-          pip install pyserial
           (cd host_sim && idf.py --preview set-target linux build)
-          python tools/test_sim.py
+      - name: Test
+        shell: bash
+        env:
+          REQUIRE_BUILDS: "1"
+        run: |
+          . "$IDF_PATH/export.sh"
+          pip install -r tests/requirements.txt
+          python -m pytest tests/test_sim.py --junitxml=test-results/junit-host-arm64.xml -o junit_suite_name="host, arm64"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: results-arm64
+          path: test-results/
+          retention-days: 14
       - name: Keep the simulator
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: host-sim-linux-arm64
           path: host_sim/build/host_sim.elf
           if-no-files-found: error
+
+  report:
+    # Every test, from both CPUs, as one check run on the commit (and a comment on a pull
+    # request when results change); failures are also annotated on their lines.
+    needs: [host, sim-arm64]
+    if: always() && (needs.host.result != 'skipped' || needs.sim-arm64.result != 'skipped')
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: results-*
+          path: test-results
+          merge-multiple: true
+      - name: Publish the results
+        # A pull request from a fork gets a read-only token, which cannot create a check run.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
+        with:
+          check_name: Test results
+          files: test-results/junit-*.xml
+          report_individual_runs: true
+          comment_mode: ${{ github.event_name == 'pull_request' && 'changes' || 'off' }}

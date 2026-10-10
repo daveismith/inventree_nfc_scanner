@@ -1,0 +1,5 @@
+# The host-side tests' packages (pip install -r tests/requirements.txt).
+pytest==9.1.1
+pytest-timeout==2.4.0
+pytest-github-actions-annotate-failures==0.4.2
+pyserial==3.5
