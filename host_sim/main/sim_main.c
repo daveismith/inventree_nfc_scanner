@@ -128,9 +128,11 @@ static void env_sysinfo(void *ctx, app_sysinfo_t *out)
     }
 }
 
-static void announce_ota(const char *state, const char *detail)
+static void announce_ota(const char *state, app_err_t error, const char *detail)
 {
-    const app_evt_t evt = { .type = APP_EVT_OTA, .origin = APP_ORIGIN_ALL, .state = state, .detail = detail };
+    const app_evt_t evt = {
+        .type = APP_EVT_OTA, .origin = APP_ORIGIN_ALL, .state = state, .error = error, .detail = detail,
+    };
     env_emit(NULL, &evt);
 }
 
@@ -139,7 +141,7 @@ static void announce_ota(const char *state, const char *detail)
 static void sim_restart(const char *new_fw)
 {
     (void)new_fw;
-    announce_ota("restarting", NULL);
+    announce_ota("restarting", APP_ERR_NONE, NULL);
     app_core_link(&s_core, LINK_PTY, false);
     app_core_link(&s_core, LINK_PTY, true);
 }
@@ -150,9 +152,9 @@ static app_err_t env_ota(void *ctx, const app_cmd_t *cmd, const char **detail)
     const bool was_active = sim_ota_active();
     const app_err_t err = sim_ota_command(cmd, env_now_ms(NULL), detail);
     if (err == APP_ERR_NONE && cmd->type == APP_CMD_OTA_BEGIN) {
-        announce_ota("downloading", NULL);
+        announce_ota("downloading", APP_ERR_NONE, NULL);
     } else if (err != APP_ERR_NONE && was_active && !sim_ota_active()) {
-        announce_ota("failed", *detail);
+        announce_ota("failed", err, *detail);
     }
     return err;
 }

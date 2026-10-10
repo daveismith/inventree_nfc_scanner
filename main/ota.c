@@ -156,10 +156,12 @@ void ota_net_release(void)
     s_net_running = false;
 }
 
-void ota_announce(const char *state, const char *detail)
+void ota_announce(const char *state, app_err_t error, const char *detail)
 {
     static char line[320];
-    app_evt_t evt = { .type = APP_EVT_OTA, .origin = APP_ORIGIN_ALL, .state = state, .detail = detail };
+    app_evt_t evt = {
+        .type = APP_EVT_OTA, .origin = APP_ORIGIN_ALL, .state = state, .error = error, .detail = detail,
+    };
     const size_t n = proto_format(&evt, line, sizeof(line));
     if (n > 0) {
         app_task_send(APP_ORIGIN_ALL, line, n);
@@ -174,7 +176,7 @@ void ota_restart_when_free(void)
     for (int waited = 0; app_task_job_active() && waited < JOB_WAIT_MS; waited += 250) {
         vTaskDelay(pdMS_TO_TICKS(250));
     }
-    ota_announce("restarting", NULL);
+    ota_announce("restarting", APP_ERR_NONE, NULL);
     vTaskDelay(pdMS_TO_TICKS(500));             /* let the lines out */
     esp_restart();
 }
@@ -239,7 +241,7 @@ static bool serial_begin(void *ctx, uint32_t size, const char **detail)
     }
     s_handle_open = true;
     ESP_LOGI(TAG, "update over USB: %lu bytes into %s", (unsigned long)size, s_part->label);
-    ota_announce("downloading", NULL);
+    ota_announce("downloading", APP_ERR_NONE, NULL);
     return true;
 }
 
@@ -334,7 +336,7 @@ app_err_t ota_command(const app_cmd_t *cmd, const char **detail)
             ota_restart_when_free();
         }
     } else if (err != APP_ERR_NONE && was_active && !ota_stream_active(&s_stream)) {
-        ota_announce("failed", *detail);        /* the session it ended was this one's */
+        ota_announce("failed", err, *detail);   /* the session it ended was this one's */
     }
     return err;
 }
@@ -342,13 +344,13 @@ app_err_t ota_command(const app_cmd_t *cmd, const char **detail)
 void ota_link_down(uint8_t origin)
 {
     if (ota_stream_link_down(&s_stream, origin)) {
-        ota_announce("failed", "the link went down mid-update");
+        ota_announce("failed", APP_ERR_CANCELLED, "the link went down mid-update");
     }
 }
 
 void ota_poll(void)
 {
     if (ota_stream_expire(&s_stream, now_ms())) {
-        ota_announce("failed", "nothing more was sent");
+        ota_announce("failed", APP_ERR_TIMEOUT, "nothing more was sent");
     }
 }
