@@ -260,7 +260,7 @@ Events report what happens, as it happens, and are not answers to anything. Each
 | `error` | `error`, and maybe `detail` | The link that sent the line |
 | `log` | `lvl`, and maybe `tag`, `msg` | USB |
 | `net` | The [network status](#network-status) | USB |
-| `ota` | `state`, and maybe `detail` | Every link |
+| `ota` | `state`, and when it failed `error`, and maybe `detail` | Every link |
 
 Field types:
 
@@ -333,8 +333,21 @@ busy logging; they are for people.
 ### `ota`
 
 An update's progress, from either kind of update: `state` is `downloading`, `restarting` or
-`failed`, with `detail` saying why it failed. After `restarting` the port closes as the
-device restarts.
+`failed`. A `failed` carries `error`, why, for a program to act on, and `detail`, for a
+person. After `restarting` the port closes as the device restarts.
+
+```json
+{"evt":"ota","state":"failed","error":"verify_failed","detail":"sha256 does not match"}
+```
+
+| `error` | Why the update failed | Worth trying again? |
+| --- | --- | --- |
+| `download_failed` | Over the network: the image could not be fetched (the server, the connection, TLS, or the image cut short) | Yes |
+| `cancelled` | Over USB: the port closed mid-update | Yes |
+| `timeout` | Over USB: nothing was sent for 30 seconds | Yes |
+| `write_failed` | The flash would not take the image, or (over USB) the first piece was not an image for this chip | Not as it is |
+| `verify_failed` | The image's SHA-256 is not the one named, or it is not a valid image for this chip | Not with the same image |
+| `bad_arg` | Over USB: a piece at the wrong offset or past `size`, or `ota_end` before all of it | Yes, from the start |
 
 ### Network status
 
@@ -363,12 +376,12 @@ event is sent to USB whenever the network side changes state.
 | `bad_json` | `error` event | Not a JSON object with a `cmd` string |
 | `line_too_long` | `error` event | Over 2047 bytes, or bytes lost on the way in |
 | `unknown_cmd` | `rsp` | No such command, or not in this build |
-| `bad_arg` | `rsp` | A field missing or wrong; `detail` names it |
+| `bad_arg` | `rsp`, `ota` | A field missing or wrong; `detail` names it |
 | `busy` | `rsp` | A job is waiting, an update is running, or the device could not take the command |
 | `no_job` | `rsp` | `cancel` with nothing to cancel; an `ota_` piece for no update |
 | `not_allowed` | `rsp` | Not from this link (see below) |
-| `timeout` | `failed` | No tag within `timeout_ms` |
-| `cancelled` | `failed` | `cancel`, `bootloader`, or the session that started it ended |
+| `timeout` | `failed`, `ota` | No tag within `timeout_ms`; nothing sent of an update for 30 seconds |
+| `cancelled` | `failed`, `ota` | `cancel`, `bootloader`, or the session that started it ended |
 | `wrong_tag_type` | `failed` | Not an NTAG213, 215 or 216 |
 | `multiple_tags` | `failed`, `tag` | More than one tag on the reader |
 | `not_blank` | `failed` | The tag holds data and `overwrite` was not given |
@@ -377,8 +390,9 @@ event is sent to USB whenever the network side changes state.
 | `locked` | `failed` | The tag is permanently locked |
 | `too_large` | `failed` | The message does not fit this tag |
 | `tag_removed` | `failed` | The tag left before the job finished |
-| `write_failed` | `failed`, `rsp` to `ota_data` | A write did not take |
-| `verify_failed` | `failed`, `rsp` to `ota_end` | What was read back is not what was written; an image that does not check out |
+| `write_failed` | `failed`, `rsp` to `ota_data`, `ota` | A write did not take |
+| `verify_failed` | `failed`, `rsp` to `ota_end`, `ota` | What was read back is not what was written; an image that does not check out |
+| `download_failed` | `ota` | An update's image could not be fetched over the network |
 | `nfc_error` | `failed`, `rsp` to `program`/`wipe` | The NFC chip is not answering, or a tag exchange failed |
 
 ## Over the network

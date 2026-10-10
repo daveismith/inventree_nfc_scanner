@@ -61,6 +61,7 @@ typedef enum {
     APP_ERR_VERIFY_FAILED,
     APP_ERR_NFC_ERROR,
     APP_ERR_NOT_ALLOWED,        /* not from this link: `bootloader` from the network, say */
+    APP_ERR_DOWNLOAD_FAILED,    /* an update's image could not be fetched */
 } app_err_t;
 
 typedef enum {
@@ -197,7 +198,7 @@ typedef enum {
     APP_EVT_ERROR,              /* a line that could not be read as a command at all */
     APP_EVT_LOG,
     APP_EVT_NET,                /* the network link changed state */
-    APP_EVT_OTA,                /* an update is progressing, done, or failed */
+    APP_EVT_OTA,                /* an update is progressing, done, or failed, and why */
 } app_evt_type_t;
 
 /* One event. Which fields mean anything depends on `type`; unused pointers are NULL. */

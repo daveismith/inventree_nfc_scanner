@@ -298,8 +298,8 @@ static void test_format_net_and_ota_events(void)
                              "\"ip\":null,\"url\":null,\"token\":false,\"reader\":\"nfc-34b7da52a084\",\"link\":\"off\","
                              "\"last_status\":0,\"poll_ms\":1000,\"wait_s\":25,\"queued\":0,\"dropped\":0}", format(&evt));
 
-    app_evt_t ota = { .type = APP_EVT_OTA, .state = "failed", .error = APP_ERR_NFC_ERROR, .detail = "image too large" };
-    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"ota\",\"state\":\"failed\",\"error\":\"nfc_error\",\"detail\":\"image too large\"}", format(&ota));
+    app_evt_t ota = { .type = APP_EVT_OTA, .state = "failed", .error = APP_ERR_DOWNLOAD_FAILED, .detail = "ESP_ERR_HTTP_CONNECT" };
+    TEST_ASSERT_EQUAL_STRING("{\"evt\":\"ota\",\"state\":\"failed\",\"error\":\"download_failed\",\"detail\":\"ESP_ERR_HTTP_CONNECT\"}", format(&ota));
 
     /* info carries the network side too, or says there is none */
     app_sysinfo_t sys = { .fw = "0.2.0", .idf = "v6.1", .reset = "poweron", .net = &net };
